@@ -7,6 +7,7 @@ const $ = (s, root=document) => root.querySelector(s);
 const uid = () => crypto.randomUUID();
 const read = (key, fallback) => { try { return JSON.parse(localStorage.getItem('henry-v1-'+key)) ?? fallback; } catch { return fallback; } };
 let user = null;
+let cloudBusy = false;
 let projects = read('projects', []);
 let activeId = read('active-project', null);
 let mode = 'Explore';
@@ -26,14 +27,51 @@ const setStatus = text => { const el = $('#status'); if (el) el.textContent = te
 async function refreshUser() {
   const { data } = await supabase.auth.getSession();
   user = data.session?.user ?? null;
-  supabase.auth.onAuthStateChange((_event, session) => { user = session?.user ?? null; render(); });
+  supabase.auth.onAuthStateChange((_event, session) => {
+    user = session?.user ?? null;
+    render();
+    if (user) syncCloud();
+  });
 }
+async function syncCloud() {
+  if (!user || cloudBusy) return;
+  cloudBusy = true;
+  const syncingUserId = user.id;
+  try {
+    for (const p of projects) {
+      const { error } = await supabase.from('henry_projects').upsert({ id:p.id, user_id:syncingUserId, title:p.title, goal:p.goal||'', created_at:p.createdAt||new Date().toISOString(), updated_at:p.updatedAt||new Date().toISOString() }, { onConflict:'id' });
+      if (error) throw error;
+    }
+    for (const [projectId, list] of Object.entries(messagesByProject)) {
+      if (!projects.some(p => p.id === projectId)) continue;
+      for (const m of list) {
+        const { error } = await supabase.from('henry_project_messages').upsert({ id:m.id, project_id:projectId, user_id:syncingUserId, role:m.role, mode:['Explore','Teach','Build'].includes(m.mode)?m.mode:'Explore', content:m.content, created_at:m.createdAt||new Date().toISOString() }, { onConflict:'id' });
+        if (error) throw error;
+      }
+    }
+    const { data: cloudProjects, error: projectsError } = await supabase.from('henry_projects').select('id,title,goal,created_at,updated_at').order('updated_at',{ascending:false});
+    if (projectsError) throw projectsError;
+    const { data: cloudMessages, error: messagesError } = await supabase.from('henry_project_messages').select('id,project_id,role,mode,content,created_at').order('created_at',{ascending:true});
+    if (messagesError) throw messagesError;
+    if (!user || user.id !== syncingUserId) return;
+    const projectMap = new Map(projects.map(p=>[p.id,p]));
+    for (const row of (cloudProjects||[])) projectMap.set(row.id,{id:row.id,title:row.title,goal:row.goal||'',createdAt:row.created_at,updatedAt:row.updated_at});
+    projects = [...projectMap.values()].sort((a,b)=>new Date(b.updatedAt||0)-new Date(a.updatedAt||0));
+    const messageMap = {}; for (const p of projects) messageMap[p.id] = messagesByProject[p.id]||[];
+    for (const row of (cloudMessages||[])) { const list=messageMap[row.project_id]||(messageMap[row.project_id]=[]); const mapped={id:row.id,role:row.role,mode:row.mode,content:row.content,createdAt:row.created_at}; const idx=list.findIndex(m=>m.id===row.id); if(idx>=0)list[idx]=mapped;else list.push(mapped); }
+    messagesByProject = messageMap;
+    if (!projects.some(p=>p.id===activeId)) activeId=projects[0]?.id||null;
+    persist(); render();
+  } catch (error) { console.warn('Henry cloud sync failed:',error); }
+  finally { cloudBusy=false; }
+}
+
 function newProject(title='Untitled engineering project', goal='') {
   const project = { id: uid(), title, goal, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   projects.unshift(project);
   activeId = project.id;
   messagesByProject[project.id] = [];
-  persist(); render();
+  persist(); render(); if (user) syncCloud();
 }
 function openAuth(mode='signin') {
   authMode = mode;
@@ -51,7 +89,7 @@ function openAuth(mode='signin') {
       : await supabase.auth.signInWithPassword({ email, password });
     if (result.error) { feedback.textContent = result.error.message; return; }
     if (mode==='signup' && !result.data.session) feedback.textContent = 'Account created. Check your email to confirm it, then sign in.';
-    else { user = result.data.user ?? result.data.session?.user ?? null; overlay.hidden = true; render(); }
+    else { user = result.data.user ?? result.data.session?.user ?? null; overlay.hidden = true; render(); if (user) syncCloud(); }
   };
 }
 function render() {
@@ -100,7 +138,7 @@ function render() {
   $('#account-button').onclick = () => user ? showAccountMenu() : openAuth('signin');
   $('#top-account').onclick = () => user ? showAccountMenu() : openAuth('signin');
   $('#edit-project')?.addEventListener('click',()=>showProjectForm(project));
-  $('#composer')?.addEventListener('submit', e=>{e.preventDefault(); const text=$('#message-input').value.trim(); if(!text||!project)return; messagesByProject[project.id] ||= []; messagesByProject[project.id].push({id:uid(),role:'user',content:text,mode,createdAt:new Date().toISOString()}); project.updatedAt=new Date().toISOString(); persist(); render();});
+  $('#composer')?.addEventListener('submit', e=>{e.preventDefault(); const text=$('#message-input').value.trim(); if(!text||!project)return; messagesByProject[project.id] ||= []; messagesByProject[project.id].push({id:uid(),role:'user',content:text,mode,createdAt:new Date().toISOString()}); project.updatedAt=new Date().toISOString(); persist(); render(); if (user) syncCloud();});
   $('#message-input')?.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('#composer').requestSubmit()}});
   const conversation=$('#conversation'); if(conversation) conversation.scrollTop=conversation.scrollHeight;
 }
@@ -108,6 +146,6 @@ function showAccountMenu() {
   const overlay=$('#auth-overlay'); overlay.innerHTML=`<div class="modal"><button class="icon-button close" id="menu-close">×</button><div class="brand-mark">${escapeHtml((user?.email||'U')[0].toUpperCase())}</div><h2>Account</h2><p class="muted-text">${escapeHtml(user?.email||'')}</p><p class="muted-text">Cloud sync is not enabled for project conversations yet.</p><button class="secondary full" id="signout">Sign out</button></div>`; overlay.hidden=false; $('#menu-close').onclick=()=>overlay.hidden=true; $('#signout').onclick=async()=>{await supabase.auth.signOut();user=null;overlay.hidden=true;render()};
 }
 function showProjectForm(project=null) {
-  const overlay=$('#project-overlay'); overlay.innerHTML=`<div class="modal"><button class="icon-button close" id="project-close">×</button><p class="eyebrow">PROJECT SETUP</p><h2>${project?'Project details':'Start with the idea'}</h2><p class="muted-text">You don't need a perfect specification. Begin with what you know.</p><form id="project-form"><label>Project name<input name="title" maxlength="100" required placeholder="e.g. Smart greenhouse assistant" value="${escapeHtml(project?.title||'')}"></label><label>What do you want to build?<textarea name="goal" rows="4" maxlength="2000" placeholder="Describe the problem, idea, or outcome you want…">${escapeHtml(project?.goal||'')}</textarea></label><button class="primary full" type="submit">${project?'Save changes':'Create project'}</button></form></div>`; overlay.hidden=false; $('#project-close').onclick=()=>overlay.hidden=true; $('#project-form').onsubmit=e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const title=String(fd.get('title')).trim();const goal=String(fd.get('goal')).trim();if(project){project.title=title;project.goal=goal;project.updatedAt=new Date().toISOString();activeId=project.id;}else{newProject(title,goal);overlay.hidden=true;return;}persist();overlay.hidden=true;render();};
+  const overlay=$('#project-overlay'); overlay.innerHTML=`<div class="modal"><button class="icon-button close" id="project-close">×</button><p class="eyebrow">PROJECT SETUP</p><h2>${project?'Project details':'Start with the idea'}</h2><p class="muted-text">You don't need a perfect specification. Begin with what you know.</p><form id="project-form"><label>Project name<input name="title" maxlength="100" required placeholder="e.g. Smart greenhouse assistant" value="${escapeHtml(project?.title||'')}"></label><label>What do you want to build?<textarea name="goal" rows="4" maxlength="2000" placeholder="Describe the problem, idea, or outcome you want…">${escapeHtml(project?.goal||'')}</textarea></label><button class="primary full" type="submit">${project?'Save changes':'Create project'}</button></form></div>`; overlay.hidden=false; $('#project-close').onclick=()=>overlay.hidden=true; $('#project-form').onsubmit=e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const title=String(fd.get('title')).trim();const goal=String(fd.get('goal')).trim();if(project){project.title=title;project.goal=goal;project.updatedAt=new Date().toISOString();activeId=project.id;}else{newProject(title,goal);overlay.hidden=true;return;}persist();overlay.hidden=true;render();if(user)syncCloud();};
 }
 refreshUser().then(render);
