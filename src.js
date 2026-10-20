@@ -81,6 +81,15 @@ function newProject(title='Untitled engineering project', goal='') {
   messagesByProject[project.id] = [];
   persist(); render(); if (user) syncCloud();
 }
+function startNewProject() {
+  // New project creation is an account-only action. Ask guests to sign up
+  // immediately; collect the project name and brief only after authentication.
+  if (!user) {
+    openAuth('signup');
+    return;
+  }
+  showProjectForm();
+}
 function openAuth(mode='signin') {
   authMode = mode;
   const overlay = $('#auth-overlay');
@@ -144,9 +153,9 @@ function render() {
     </main>
     <div id="auth-overlay" class="overlay" hidden></div><div id="project-overlay" class="overlay" hidden></div>
   `;
-  $('#new-project').onclick = showProjectForm;
-  $('#hero-new')?.addEventListener('click', showProjectForm);
-  $('#empty-new')?.addEventListener('click', showProjectForm);
+  $('#new-project').onclick = startNewProject;
+  $('#hero-new')?.addEventListener('click', startNewProject);
+  $('#empty-new')?.addEventListener('click', startNewProject);
   document.querySelectorAll('[data-project]').forEach(b=>b.addEventListener('click',()=>{activeId=b.dataset.project;persist();render()}));
   document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{mode=b.dataset.mode;render()}));
   document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('#message-input').value=b.dataset.prompt; $('#message-input').focus(); }));
