@@ -29,8 +29,16 @@ async function refreshUser() {
   user = data.session?.user ?? null;
   supabase.auth.onAuthStateChange((_event, session) => {
     user = session?.user ?? null;
-    render();
-    if (user) syncCloud();
+    // Auth events can fire during signup and replace #app.innerHTML.
+    // Re-rendering here destroys the active onboarding modal and its handlers,
+    // which can strand a pending project at the dashboard.
+    const onboardingInProgress =
+      Boolean(localStorage.getItem('henry-v1-pending-project')) ||
+      Boolean(localStorage.getItem('henry-v1-pending-experience-level')) ||
+      ($('#project-overlay') && !$('#project-overlay').hidden) ||
+      ($('#auth-overlay') && !$('#auth-overlay').hidden);
+    if (!onboardingInProgress) render();
+    if (user && !onboardingInProgress) syncCloud();
   });
 }
 async function syncCloud() {
