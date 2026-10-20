@@ -1,0 +1,9 @@
+{
+  "name": "Henry V1 Learning Lab",
+  "short_name": "Henry V1",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050907",
+  "theme_color": "#050907",
+  "description": "Personal learning laboratory"
+}
