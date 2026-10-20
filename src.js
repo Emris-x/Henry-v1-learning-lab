@@ -21,7 +21,8 @@ const persist = () => {
   localStorage.setItem('henry-v1-active-project', JSON.stringify(activeId));
   localStorage.setItem('henry-v1-messages', JSON.stringify(messagesByProject));
 };
-const activeProject = () => projects.find(p => p.id === activeId) || null;
+const visibleProjects = () => projects.filter(p => user ? p.userId === user.id : !p.userId);
+const activeProject = () => visibleProjects().find(p => p.id === activeId) || null;
 const setStatus = text => { const el = $('#status'); if (el) el.textContent = text; };
 
 async function refreshUser() {
@@ -46,12 +47,12 @@ async function syncCloud() {
   cloudBusy = true;
   const syncingUserId = user.id;
   try {
-    for (const p of projects) {
+    for (const p of projects.filter(item => item.userId === syncingUserId)) {
       const { error } = await supabase.from('henry_projects').upsert({ id:p.id, user_id:syncingUserId, title:p.title, goal:p.goal||'', created_at:p.createdAt||new Date().toISOString(), updated_at:p.updatedAt||new Date().toISOString() }, { onConflict:'id' });
       if (error) throw error;
     }
     for (const [projectId, list] of Object.entries(messagesByProject)) {
-      if (!projects.some(p => p.id === projectId)) continue;
+      if (!projects.some(p => p.id === projectId && p.userId === syncingUserId)) continue;
       for (const m of list) {
         const { error } = await supabase.from('henry_project_messages').upsert({ id:m.id, project_id:projectId, user_id:syncingUserId, role:m.role, mode:['Explore','Teach','Build'].includes(m.mode)?m.mode:'Explore', content:m.content, created_at:m.createdAt||new Date().toISOString() }, { onConflict:'id' });
         if (error) throw error;
@@ -62,20 +63,20 @@ async function syncCloud() {
     const { data: cloudMessages, error: messagesError } = await supabase.from('henry_project_messages').select('id,project_id,role,mode,content,created_at').order('created_at',{ascending:true});
     if (messagesError) throw messagesError;
     if (!user || user.id !== syncingUserId) return;
-    const projectMap = new Map(projects.map(p=>[p.id,p]));
-    for (const row of (cloudProjects||[])) projectMap.set(row.id,{id:row.id,title:row.title,goal:row.goal||'',createdAt:row.created_at,updatedAt:row.updated_at});
+    const projectMap = new Map(projects.filter(p => p.userId !== syncingUserId).map(p=>[p.id,p]));
+    for (const row of (cloudProjects||[])) projectMap.set(row.id,{id:row.id,userId:syncingUserId,title:row.title,goal:row.goal||'',createdAt:row.created_at,updatedAt:row.updated_at});
     projects = [...projectMap.values()].sort((a,b)=>new Date(b.updatedAt||0)-new Date(a.updatedAt||0));
-    const messageMap = {}; for (const p of projects) messageMap[p.id] = messagesByProject[p.id]||[];
+    const messageMap = {}; for (const p of projects) messageMap[p.id] = p.userId === syncingUserId ? (messagesByProject[p.id]||[]) : [];
     for (const row of (cloudMessages||[])) { const list=messageMap[row.project_id]||(messageMap[row.project_id]=[]); const mapped={id:row.id,role:row.role,mode:row.mode,content:row.content,createdAt:row.created_at}; const idx=list.findIndex(m=>m.id===row.id); if(idx>=0)list[idx]=mapped;else list.push(mapped); }
     messagesByProject = messageMap;
-    if (!projects.some(p=>p.id===activeId)) activeId=projects[0]?.id||null;
+    if (!visibleProjects().some(p=>p.id===activeId)) activeId=visibleProjects()[0]?.id||null;
     persist(); render();
   } catch (error) { console.warn('Henry cloud sync failed:',error); }
   finally { cloudBusy=false; }
 }
 
 function newProject(title='Untitled engineering project', goal='') {
-  const project = { id: uid(), title, goal, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  const project = { id: uid(), userId: user?.id || null, title, goal, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   projects.unshift(project);
   activeId = project.id;
   messagesByProject[project.id] = [];
@@ -124,7 +125,7 @@ function render() {
       <div class="brand"><div class="brand-mark">H</div><div><strong>HENRY</strong><small>ENGINEERING INTELLIGENCE</small></div></div>
       <button class="new-project" id="new-project"><span>＋</span> New project</button>
       <p class="section-label">YOUR WORKSPACE</p>
-      <div class="project-list">${projects.length ? projects.map(p=>`<button class="project-link ${p.id===activeId?'selected':''}" data-project="${p.id}"><span class="project-glyph">◈</span><span>${escapeHtml(p.title)}</span></button>`).join('') : '<p class="sidebar-empty">Your projects will appear here.</p>'}</div>
+      <div class="project-list">${visibleProjects().length ? visibleProjects().map(p=>`<button class="project-link ${p.id===activeId?'selected':''}" data-project="${p.id}"><span class="project-glyph">◈</span><span>${escapeHtml(p.title)}</span></button>`).join('') : '<p class="sidebar-empty">Your projects will appear here.</p>'}</div>
       <div class="sidebar-bottom"><div class="engine-state"><span class="state-dot"></span><div><strong>AI engine</strong><small>Not connected yet</small></div></div><button id="account-button" class="account-button"><span class="avatar">${user?escapeHtml((user.email||'U')[0].toUpperCase()):'G'}</span><span><strong>${user?escapeHtml(user.email):'Guest workspace'}</strong><small>${user?'Signed in':'Sign in to your account'}</small></span><span class="more">···</span></button></div>
     </aside>
     <main class="main">
@@ -145,8 +146,8 @@ function render() {
         <section class="overview">
           <div class="hero"><div><p class="eyebrow">YOUR ENGINEERING SPACE</p><h1>Ideas deserve<br><em>to become real.</em></h1><p>Think clearly. Learn deeply. Build with purpose.</p></div><button class="primary" id="hero-new">＋ Start a project</button></div>
           <div class="overview-grid"><article class="overview-card"><span class="card-icon">◉</span><p class="eyebrow">01 / EXPLORE</p><h2>Establish the idea.</h2><p>Clarify the problem, assumptions, requirements, and what success means.</p></article><article class="overview-card"><span class="card-icon">⌘</span><p class="eyebrow">02 / TEACH</p><h2>Understand the why.</h2><p>Learn the concepts and terminology behind the engineering decisions.</p></article><article class="overview-card"><span class="card-icon">⌁</span><p class="eyebrow">03 / BUILD</p><h2>Move toward reality.</h2><p>Turn sound foundations into a practical implementation plan.</p></article></div>
-          <div class="projects-heading"><div><p class="eyebrow">PROJECTS</p><h2>Your work, in one place</h2></div><span class="project-count">${projects.length} ${projects.length===1?'project':'projects'}</span></div>
-          <div class="project-grid">${projects.length?projects.map(p=>`<button class="project-card" data-project="${p.id}"><span class="card-icon">◈</span><h3>${escapeHtml(p.title)}</h3><p>${escapeHtml(p.goal||'No project brief yet.')}</p><span class="open-project">Open workspace ↗</span></button>`).join(''):'<div class="empty-projects"><div class="empty-mark">＋</div><strong>Your first project starts with an idea.</strong><p>Create a workspace to organise your thinking and engineering decisions.</p><button class="secondary" id="empty-new">Create your first project</button></div>'}</div>
+          <div class="projects-heading"><div><p class="eyebrow">PROJECTS</p><h2>Your work, in one place</h2></div><span class="project-count">${visibleProjects().length} ${visibleProjects().length===1?'project':'projects'}</span></div>
+          <div class="project-grid">${visibleProjects().length?visibleProjects().map(p=>`<button class="project-card" data-project="${p.id}"><span class="card-icon">◈</span><h3>${escapeHtml(p.title)}</h3><p>${escapeHtml(p.goal||'No project brief yet.')}</p><span class="open-project">Open workspace ↗</span></button>`).join(''):'<div class="empty-projects"><div class="empty-mark">＋</div><strong>Your first project starts with an idea.</strong><p>Create a workspace to organise your thinking and engineering decisions.</p><button class="secondary" id="empty-new">Create your first project</button></div>'}</div>
           <div class="build-notice"><div><span class="state-dot"></span><strong>Foundation stage</strong></div><p>Project workspaces are being established first. The online AI engine and cloud conversation storage will be connected in the next implementation steps.</p></div>
         </section>
       `}
