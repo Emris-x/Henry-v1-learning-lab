@@ -88,8 +88,15 @@ function openAuth(mode='signin') {
       ? await supabase.auth.signUp({ email, password })
       : await supabase.auth.signInWithPassword({ email, password });
     if (result.error) { feedback.textContent = result.error.message; return; }
-    if (mode==='signup' && !result.data.session) feedback.textContent = 'Account created. Check your email to confirm it, then sign in.';
-    else { user = result.data.user ?? result.data.session?.user ?? null; overlay.hidden = true; render(); if (user) syncCloud(); }
+    if (mode==='signup' && !result.data.session) {
+      feedback.textContent = 'Account request received. Check your email if confirmation is enabled, then return here and sign in to continue.';
+    } else {
+      user = result.data.user ?? result.data.session?.user ?? null;
+      overlay.hidden = true;
+      if (mode==='signup' || (user && !user.user_metadata?.experience_level)) showExperiencePicker();
+      else if (user && localStorage.getItem('henry-v1-pending-project')) finishPendingProject();
+      else { render(); if (user) syncCloud(); }
+    }
   };
 }
 function render() {
@@ -115,7 +122,7 @@ function render() {
             </div>
             <form class="composer" id="composer"><textarea id="message-input" rows="2" maxlength="8000" placeholder="Describe your idea or ask an engineering question…" ${busy?'disabled':''}></textarea><div class="composer-bottom"><span>Enter to send · Shift + Enter for a new line</span><button class="send-button" type="submit" ${busy?'disabled':''}>Send <span>↑</span></button></div></form>
           </div>
-          <p class="privacy-note">Your current project and conversation are saved in this browser. Cloud conversation sync will be added after the data model is in place.</p>
+          <p class="privacy-note">Your project is saved in this workspace. Sign in to sync it across sessions. Henry's AI engine is not connected yet.</p>
         </section>
       ` : `
         <section class="overview">
@@ -145,7 +152,54 @@ function render() {
 function showAccountMenu() {
   const overlay=$('#auth-overlay'); overlay.innerHTML=`<div class="modal"><button class="icon-button close" id="menu-close">×</button><div class="brand-mark">${escapeHtml((user?.email||'U')[0].toUpperCase())}</div><h2>Account</h2><p class="muted-text">${escapeHtml(user?.email||'')}</p><p class="muted-text">Cloud sync is not enabled for project conversations yet.</p><button class="secondary full" id="signout">Sign out</button></div>`; overlay.hidden=false; $('#menu-close').onclick=()=>overlay.hidden=true; $('#signout').onclick=async()=>{await supabase.auth.signOut();user=null;overlay.hidden=true;render()};
 }
+function finishPendingProject() {
+  let draft = null;
+  try { draft = JSON.parse(localStorage.getItem('henry-v1-pending-project') || 'null'); } catch {}
+  if (!draft) { render(); if (user) syncCloud(); return; }
+  localStorage.removeItem('henry-v1-pending-project');
+  const overlay = $('#project-overlay');
+  if (overlay) overlay.hidden = true;
+  newProject(String(draft.title || 'Untitled engineering project'), String(draft.goal || ''));
+}
+function showExperiencePicker() {
+  const overlay = $('#project-overlay');
+  if (!overlay) return;
+  overlay.innerHTML = `<div class="modal experience-modal"><div class="brand-mark">H</div><p class="eyebrow">PERSONALISE YOUR WORKSPACE</p><h2>Where are you starting from?</h2><p class="muted-text">Henry will adapt the depth of its explanations, technical language, and guidance to your experience. You can still ask to be taught at any time.</p><div class="experience-options">
+    <button class="experience-option" data-level="beginner"><span class="experience-symbol">01</span><span><strong>Beginner</strong><small>Explain the foundations, terminology, and steps clearly.</small></span><span class="experience-arrow">↗</span></button>
+    <button class="experience-option" data-level="intermediate"><span class="experience-symbol">02</span><span><strong>Intermediate</strong><small>Balance practical guidance with deeper technical explanations.</small></span><span class="experience-arrow">↗</span></button>
+    <button class="experience-option" data-level="expert"><span class="experience-symbol">03</span><span><strong>Expert</strong><small>Focus on technical depth, trade-offs, and concise collaboration.</small></span><span class="experience-arrow">↗</span></button>
+  </div><p id="experience-feedback" class="feedback" aria-live="polite"></p></div>`;
+  overlay.hidden = false;
+  overlay.querySelectorAll('[data-level]').forEach(button => button.onclick = async () => {
+    const feedback = $('#experience-feedback');
+    overlay.querySelectorAll('[data-level]').forEach(b => b.disabled = true);
+    feedback.textContent = 'Setting up your workspace…';
+    const level = button.dataset.level;
+    if (user) {
+      const { error } = await supabase.auth.updateUser({ data: { experience_level: level } });
+      if (error) {
+        overlay.querySelectorAll('[data-level]').forEach(b => b.disabled = false);
+        feedback.textContent = 'Your choice could not be saved. Please try again.';
+        console.warn('Henry profile setup failed:', error);
+        return;
+      }
+      user = { ...user, user_metadata: { ...(user.user_metadata || {}), experience_level: level } };
+    } else {
+      localStorage.setItem('henry-v1-pending-experience-level', level);
+    }
+    const pendingLevel = localStorage.getItem('henry-v1-pending-experience-level');
+    if (pendingLevel && user) {
+      const { error } = await supabase.auth.updateUser({ data: { experience_level: pendingLevel } });
+      if (error) { feedback.textContent = 'Your choice could not be saved. Please try again.'; return; }
+      localStorage.removeItem('henry-v1-pending-experience-level');
+      user = { ...user, user_metadata: { ...(user.user_metadata || {}), experience_level: pendingLevel } };
+    }
+    overlay.hidden = true;
+    if (localStorage.getItem('henry-v1-pending-project')) finishPendingProject();
+    else { render(); if (user) syncCloud(); }
+  });
+}
 function showProjectForm(project=null) {
-  const overlay=$('#project-overlay'); overlay.innerHTML=`<div class="modal"><button class="icon-button close" id="project-close">×</button><p class="eyebrow">PROJECT SETUP</p><h2>${project?'Project details':'Start with the idea'}</h2><p class="muted-text">You don't need a perfect specification. Begin with what you know.</p><form id="project-form"><label>Project name<input name="title" maxlength="100" required placeholder="e.g. Smart greenhouse assistant" value="${escapeHtml(project?.title||'')}"></label><label>What do you want to build?<textarea name="goal" rows="4" maxlength="2000" placeholder="Describe the problem, idea, or outcome you want…">${escapeHtml(project?.goal||'')}</textarea></label><button class="primary full" type="submit">${project?'Save changes':'Create project'}</button></form></div>`; overlay.hidden=false; $('#project-close').onclick=()=>overlay.hidden=true; $('#project-form').onsubmit=e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const title=String(fd.get('title')).trim();const goal=String(fd.get('goal')).trim();if(project){project.title=title;project.goal=goal;project.updatedAt=new Date().toISOString();activeId=project.id;}else{newProject(title,goal);overlay.hidden=true;return;}persist();overlay.hidden=true;render();if(user)syncCloud();};
+  const overlay=$('#project-overlay'); overlay.innerHTML=`<div class="modal"><button class="icon-button close" id="project-close">×</button><p class="eyebrow">PROJECT SETUP</p><h2>${project?'Project details':'Start with the idea'}</h2><p class="muted-text">You don't need a perfect specification. Begin with what you know.</p><form id="project-form"><label>Project name<input name="title" maxlength="100" required placeholder="e.g. Smart greenhouse assistant" value="${escapeHtml(project?.title||'')}"></label><label>What do you want to build?<textarea name="goal" rows="4" maxlength="2000" placeholder="Describe the problem, idea, or outcome you want…">${escapeHtml(project?.goal||'')}</textarea></label><button class="primary full" type="submit">${project?'Save changes':'Create project'}</button></form></div>`; overlay.hidden=false; $('#project-close').onclick=()=>overlay.hidden=true; $('#project-form').onsubmit=e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const title=String(fd.get('title')).trim();const goal=String(fd.get('goal')).trim();if(project){project.title=title;project.goal=goal;project.updatedAt=new Date().toISOString();activeId=project.id;}else{if(!user){localStorage.setItem('henry-v1-pending-project',JSON.stringify({title,goal,createdAt:new Date().toISOString()}));overlay.hidden=true;openAuth('signup');return;}newProject(title,goal);overlay.hidden=true;return;}persist();overlay.hidden=true;render();if(user)syncCloud();};
 }
 refreshUser().then(render);
