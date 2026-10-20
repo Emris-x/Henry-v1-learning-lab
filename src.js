@@ -30,9 +30,20 @@ async function refreshUser() {
   user = data.session?.user ?? null;
   supabase.auth.onAuthStateChange((_event, session) => {
     user = session?.user ?? null;
+    // A signed-out session must never keep displaying the previous account's
+    // active private project. Preserve its stored data for the next sign-in.
+    if (!user) {
+      activeId = null;
+      persist();
+      const authOverlay = $('#auth-overlay');
+      const projectOverlay = $('#project-overlay');
+      if (authOverlay) authOverlay.hidden = true;
+      if (projectOverlay) projectOverlay.hidden = true;
+      render();
+      return;
+    }
     // Auth events can fire during signup and replace #app.innerHTML.
-    // Re-rendering here destroys the active onboarding modal and its handlers,
-    // which can strand a pending project at the dashboard.
+    // Keep onboarding forms alive while the account is being set up.
     const onboardingInProgress =
       Boolean(localStorage.getItem('henry-v1-pending-project')) ||
       Boolean(localStorage.getItem('henry-v1-pending-experience-level')) ||
@@ -168,7 +179,7 @@ function render() {
   const conversation=$('#conversation'); if(conversation) conversation.scrollTop=conversation.scrollHeight;
 }
 function showAccountMenu() {
-  const overlay=$('#auth-overlay'); overlay.innerHTML=`<div class="modal"><button class="icon-button close" id="menu-close">×</button><div class="brand-mark">${escapeHtml((user?.email||'U')[0].toUpperCase())}</div><h2>Account</h2><p class="muted-text">${escapeHtml(user?.email||'')}</p><p class="muted-text">Cloud sync is not enabled for project conversations yet.</p><button class="secondary full" id="signout">Sign out</button></div>`; overlay.hidden=false; $('#menu-close').onclick=()=>overlay.hidden=true; $('#signout').onclick=async()=>{await supabase.auth.signOut();user=null;overlay.hidden=true;render()};
+  const overlay=$('#auth-overlay'); overlay.innerHTML=`<div class="modal"><button class="icon-button close" id="menu-close">×</button><div class="brand-mark">${escapeHtml((user?.email||'U')[0].toUpperCase())}</div><h2>Account</h2><p class="muted-text">${escapeHtml(user?.email||'')}</p><p class="muted-text">Cloud sync is not enabled for project conversations yet.</p><button class="secondary full" id="signout">Sign out</button></div>`; overlay.hidden=false; $('#menu-close').onclick=()=>overlay.hidden=true; $('#signout').onclick=async()=>{const {error}=await supabase.auth.signOut();if(error){console.warn('Henry sign-out failed:',error);return;}user=null;activeId=null;persist();overlay.hidden=true;const projectOverlay=$('#project-overlay');if(projectOverlay)projectOverlay.hidden=true;render()};
 }
 function finishPendingProject() {
   let draft = null;
