@@ -11,6 +11,9 @@ let cloudBusy = false;
 let projects = read('projects', []);
 let activeId = read('active-project', null);
 let mode = 'Explore';
+let appSection = 'home';
+let theme = localStorage.getItem('henry-v1-theme') || 'dark';
+let buildEvents = [{time:new Date().toISOString(),text:'Henry workspace initialised',kind:'system'}];
 let messagesByProject = read('messages', {});
 let authMode = 'signin';
 let busy = false;
@@ -33,6 +36,7 @@ async function refreshUser() {
     // A signed-out session must never keep displaying the previous account's
     // active private project. Preserve its stored data for the next sign-in.
     if (!user) {
+      appSection = 'home';
       activeId = null;
       persist();
       const authOverlay = $('#auth-overlay');
@@ -87,6 +91,8 @@ async function syncCloud() {
 }
 
 function newProject(title='Untitled engineering project', goal='') {
+  appSection='chat';
+  buildEvents.unshift({time:new Date().toISOString(),text:'Opened project workspace: '+title,kind:'project'});
   const project = { id: uid(), userId: user?.id || null, title, goal, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   projects.unshift(project);
   activeId = project.id;
@@ -130,6 +136,8 @@ function openAuth(mode='signin') {
 }
 function render() {
   const project = activeProject();
+  const showChat = appSection === 'chat' && Boolean(project);
+  document.documentElement.dataset.theme = theme;
   const messages = project ? (messagesByProject[project.id] || []) : [];
   $('#app').innerHTML = `
     <aside class="sidebar">
@@ -141,7 +149,7 @@ function render() {
     </aside>
     <main class="main">
       <header class="topbar"><div class="crumb"><span>Workspace</span><span class="slash">/</span><strong>${project?escapeHtml(project.title):'Overview'}</strong></div><div class="top-actions"><span class="connection"><i></i> Local workspace</span><button class="avatar small-avatar" id="top-account" aria-label="Account">${user?escapeHtml((user.email||'U')[0].toUpperCase()):'G'}</button></div></header>
-      ${project ? `
+      ${showChat ? `
         <section class="work-area">
           <div class="project-heading"><div><p class="eyebrow">ENGINEERING WORKSPACE</p><h1>${escapeHtml(project.title)}</h1><p class="project-goal">${escapeHtml(project.goal||'Describe your idea and build its foundation here.')}</p></div><button class="quiet-button" id="edit-project">Project details ↗</button></div>
           <div class="mode-row"><span class="mode-label">WORKING MODE</span>${['Explore','Teach','Build'].map(m=>`<button class="mode-chip ${m===mode?'active':''}" data-mode="${m}">${m==='Explore'?'◉':m==='Teach'?'⌘':'⌁'} &nbsp;${m}</button>`).join('')}<span class="mode-hint">${mode==='Explore'?'Clarify the idea and test assumptions':mode==='Teach'?'Learn concepts step by step':'Plan and work through implementation'}</span></div>
@@ -153,28 +161,38 @@ function render() {
           </div>
           <p class="privacy-note">Your project is saved in this workspace. Sign in to sync it across sessions. Henry's AI engine is not connected yet.</p>
         </section>
+      ` : appSection === 'build' ? `
+        <section class="overview build-screen"><p class="eyebrow">HENRY / BUILD CONSOLE</p><h1>Watch ideas become systems.</h1><p class="muted-text">A live view of what Henry is doing. Events are only shown when the app records an action.</p><div class="terminal-panel"><div class="terminal-head"><span class="terminal-lights">● ● ●</span><strong>HENRY.RUNTIME</strong><span class="runtime-state">${busy?'PROCESSING':'STANDBY'}</span></div><div class="terminal-lines">${buildEvents.slice(-24).map((event,i)=>`<p class="terminal-line"><span>${String(i+1).padStart(2,'0')}</span><time>${new Date(event.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</time><b class="${escapeHtml(event.kind)}">${escapeHtml(event.kind.toUpperCase())}</b>${escapeHtml(event.text)}</p>`).join('')}<p class="terminal-cursor">▌ <span>${busy?'Working on your request…':'Waiting for your next instruction.'}</span></p></div></div><button class="secondary" id="build-home">← Back home</button></section>
+      ` : appSection === 'settings' ? `
+        <section class="overview settings-screen"><p class="eyebrow">PREFERENCES</p><h1>Make Henry yours.</h1><p class="muted-text">Appearance and workspace preferences.</p><article class="setting-card"><div><strong>Appearance</strong><p>Choose the colour scheme for your workspace.</p></div><div class="theme-switch"><button class="theme-choice ${theme==='dark'?'selected':''}" data-theme-choice="dark">◐ Dark</button><button class="theme-choice ${theme==='light'?'selected':''}" data-theme-choice="light">☼ Light</button></div></article><article class="setting-card"><div><strong>Account</strong><p>${user?'Signed in as '+escapeHtml(user.email):'Sign in to save projects to your account.'}</p></div><button class="secondary" id="settings-account">${user?'Manage account':'Sign in'}</button></article><button class="secondary" id="settings-home">← Back home</button></section>
       ` : `
         <section class="overview">
           <div class="hero"><div><p class="eyebrow">YOUR ENGINEERING SPACE</p><h1>Ideas deserve<br><em>to become real.</em></h1><p>Think clearly. Learn deeply. Build with purpose.</p></div><button class="primary" id="hero-new">＋ Start a project</button></div>
           <div class="overview-grid"><article class="overview-card"><span class="card-icon">◉</span><p class="eyebrow">01 / EXPLORE</p><h2>Establish the idea.</h2><p>Clarify the problem, assumptions, requirements, and what success means.</p></article><article class="overview-card"><span class="card-icon">⌘</span><p class="eyebrow">02 / TEACH</p><h2>Understand the why.</h2><p>Learn the concepts and terminology behind the engineering decisions.</p></article><article class="overview-card"><span class="card-icon">⌁</span><p class="eyebrow">03 / BUILD</p><h2>Move toward reality.</h2><p>Turn sound foundations into a practical implementation plan.</p></article></div>
-          <div class="projects-heading"><div><p class="eyebrow">PROJECTS</p><h2>Your work, in one place</h2></div><span class="project-count">${visibleProjects().length} ${visibleProjects().length===1?'project':'projects'}</span></div>
+          <div class="projects-heading"><div><p class="eyebrow">PREVIOUS PROJECTS</p><h2>Pick up where you left off</h2></div><span class="project-count">${visibleProjects().length} ${visibleProjects().length===1?'project':'projects'}</span></div>
           <div class="project-grid">${visibleProjects().length?visibleProjects().map(p=>`<button class="project-card" data-project="${p.id}"><span class="card-icon">◈</span><h3>${escapeHtml(p.title)}</h3><p>${escapeHtml(p.goal||'No project brief yet.')}</p><span class="open-project">Open workspace ↗</span></button>`).join(''):'<div class="empty-projects"><div class="empty-mark">＋</div><strong>Your first project starts with an idea.</strong><p>Create a workspace to organise your thinking and engineering decisions.</p><button class="secondary" id="empty-new">Create your first project</button></div>'}</div>
           <div class="build-notice"><div><span class="state-dot"></span><strong>Foundation stage</strong></div><p>Project workspaces are being established first. The online AI engine and cloud conversation storage will be connected in the next implementation steps.</p></div>
         </section>
       `}
     </main>
+    ${!showChat ? `<nav class="bottom-nav" aria-label="Main navigation"><button class="nav-item ${appSection==='home'?'active':''}" data-section="home"><span>⌂</span><small>Home</small></button><button class="nav-item ${appSection==='build'?'active':''}" data-section="build"><span>⌘</span><small>Build</small></button><button class="nav-item ${appSection==='settings'?'active':''}" data-section="settings"><span>⚙</span><small>Settings</small></button></nav>` : ''}
     <div id="auth-overlay" class="overlay" hidden></div><div id="project-overlay" class="overlay" hidden></div>
   `;
   $('#new-project').onclick = startNewProject;
+  document.querySelectorAll('[data-section]').forEach(b=>b.addEventListener('click',()=>{appSection=b.dataset.section;activeId=null;persist();render();}));
+  document.querySelectorAll('[data-theme-choice]').forEach(b=>b.addEventListener('click',()=>{theme=b.dataset.themeChoice;localStorage.setItem('henry-v1-theme',theme);render();}));
+  $('#build-home')?.addEventListener('click',()=>{appSection='home';activeId=null;render()});
+  $('#settings-home')?.addEventListener('click',()=>{appSection='home';activeId=null;render()});
+  $('#settings-account')?.addEventListener('click',()=>user?showAccountMenu():openAuth('signin'));
   $('#hero-new')?.addEventListener('click', startNewProject);
   $('#empty-new')?.addEventListener('click', startNewProject);
-  document.querySelectorAll('[data-project]').forEach(b=>b.addEventListener('click',()=>{activeId=b.dataset.project;persist();render()}));
+  document.querySelectorAll('[data-project]').forEach(b=>b.addEventListener('click',()=>{activeId=b.dataset.project;appSection='chat';persist();render()}));
   document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{mode=b.dataset.mode;render()}));
   document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('#message-input').value=b.dataset.prompt; $('#message-input').focus(); }));
   $('#account-button').onclick = () => user ? showAccountMenu() : openAuth('signin');
   $('#top-account').onclick = () => user ? showAccountMenu() : openAuth('signin');
   $('#edit-project')?.addEventListener('click',()=>showProjectForm(project));
-  $('#composer')?.addEventListener('submit', async e=>{e.preventDefault(); const text=$('#message-input').value.trim(); if(!text||!project||busy)return; if(!user){openAuth('signin');return;} const projectId=project.id; const currentProject=visibleProjects().find(p=>p.id===projectId); if(!currentProject)return; messagesByProject[projectId] ||= []; messagesByProject[projectId].push({id:uid(),role:'user',content:text,mode,createdAt:new Date().toISOString()}); currentProject.updatedAt=new Date().toISOString(); busy=true; persist(); render(); if(user)syncCloud(); try { const {data,error}=await supabase.functions.invoke('henry-chat',{body:{project:{title:currentProject.title,goal:currentProject.goal||''},mode,experienceLevel:user.user_metadata?.experience_level||'beginner',messages:(messagesByProject[projectId]||[]).slice(-20).map(m=>({role:m.role,content:m.content,mode:m.mode||mode}))}}); if(error)throw error; if(!data?.reply)throw new Error(data?.error||'Henry did not receive a response. Please try again.'); if(!user||user.id!==currentProject.userId||!visibleProjects().some(p=>p.id===projectId))return; messagesByProject[projectId].push({id:uid(),role:'assistant',content:data.reply,mode,createdAt:new Date().toISOString()}); currentProject.updatedAt=new Date().toISOString(); } catch(error) { console.warn('Henry AI request failed:',error); if(user&&user.id===currentProject.userId&&visibleProjects().some(p=>p.id===projectId)) messagesByProject[projectId].push({id:uid(),role:'assistant',content:'I could not connect to the AI engine just yet. Your message is saved. Check that the free AI provider key is configured, then try again.\n\nTechnical detail: '+String(error.message||error).slice(0,240),mode,createdAt:new Date().toISOString()}); } finally {busy=false;persist();if(user)syncCloud();if(activeId===projectId)render();} });
+  $('#composer')?.addEventListener('submit', async e=>{e.preventDefault(); const text=$('#message-input').value.trim(); if(!text||!project||busy)return; if(!user){openAuth('signin');return;} const projectId=project.id; const currentProject=visibleProjects().find(p=>p.id===projectId); if(!currentProject)return; messagesByProject[projectId] ||= []; messagesByProject[projectId].push({id:uid(),role:'user',content:text,mode,createdAt:new Date().toISOString()}); buildEvents.unshift({time:new Date().toISOString(),text:'User submitted a message in '+currentProject.title,kind:'input'}); currentProject.updatedAt=new Date().toISOString(); busy=true; persist(); render(); if(user)syncCloud(); try { const {data,error}=await supabase.functions.invoke('henry-chat',{body:{project:{title:currentProject.title,goal:currentProject.goal||''},mode,experienceLevel:user.user_metadata?.experience_level||'beginner',messages:(messagesByProject[projectId]||[]).slice(-20).map(m=>({role:m.role,content:m.content,mode:m.mode||mode}))}}); if(error)throw error; if(!data?.reply)throw new Error(data?.error||'Henry did not receive a response. Please try again.'); if(!user||user.id!==currentProject.userId||!visibleProjects().some(p=>p.id===projectId))return; messagesByProject[projectId].push({id:uid(),role:'assistant',content:data.reply,mode,createdAt:new Date().toISOString()}); buildEvents.unshift({time:new Date().toISOString(),text:'AI response received and added to conversation',kind:'success'}); currentProject.updatedAt=new Date().toISOString(); } catch(error) { console.warn('Henry AI request failed:',error); if(user&&user.id===currentProject.userId&&visibleProjects().some(p=>p.id===projectId)) messagesByProject[projectId].push({id:uid(),role:'assistant',content:'I could not connect to the AI engine just yet. Your message is saved. Check that the free AI provider key is configured, then try again.\n\nTechnical detail: '+String(error.message||error).slice(0,240),mode,createdAt:new Date().toISOString()}); } finally {busy=false;persist();if(user)syncCloud();if(activeId===projectId)render();} });
   $('#message-input')?.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('#composer').requestSubmit()}});
   const conversation=$('#conversation'); if(conversation) conversation.scrollTop=conversation.scrollHeight;
 }
