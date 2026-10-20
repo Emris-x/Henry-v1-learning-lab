@@ -1,16 +1,29 @@
 # Henry V1 — Learning Lab
 
-Mobile-first PWA foundation for tracking learning objectives and storing notes. This is not a trained foundation model. The first version stores user knowledge locally; autonomous AI research, PDF extraction and background jobs must be connected in later milestones.
+Mobile-first PWA for tracking learning objectives, storing knowledge notes, and keeping a learning journal. Henry V1 is a learning-workspace foundation, not a trained foundation model.
 
-## Deploy
-Import this repository into Vercel and deploy as a static Vite project. Supabase schema is in `supabase/schema.sql`. No secret API keys belong in browser code.
+## Deployment
+- Production app: https://henry-v1-learning-lab.vercel.app
+- Supabase project: `hokkvulwfowzjdgopnlk`
+- Supabase schema: `supabase/schema.sql`
+- Public browser configuration: `supabase-config.js` (contains only the project URL and publishable key; never place a service-role key in client code).
 
 ## Current capabilities
-- Mobile-first black/green dashboard
-- Learning objectives with manually recorded progress
-- Notes and searchable knowledge library
+- Mobile-first black/green dashboard and installable PWA shell
+- Create learning objectives and manually record progress
+- Save and search knowledge notes; import text/Markdown/code files
 - Learning journal and JSON export
-- Local browser persistence and PWA install manifest
+- Local browser persistence for offline/fallback use
+- Supabase email/password sign-up and sign-in
+- Signed-in users can sync objectives, knowledge notes and journal entries to their own account
+- Row Level Security is enabled on the three data tables so users can access only rows owned by their account
 
-## Honest limitations
-No language model, live web-search worker, PDF parser, or persistent cloud sync is connected yet. Progress is manual until real task workers are implemented. Local browser data does not automatically sync between devices.
+## Current limitations
+- No language model is connected yet; the Learning Chat saves teaching notes rather than generating model responses.
+- No automated web-research worker, PDF extraction, or background task runner yet.
+- Objective progress remains manually recorded.
+- Cloud sync requires an account and an internet connection. Local browser data remains on the device until a signed-in sync occurs.
+- If Supabase email confirmation is enabled, users must confirm their email before password sign-in.
+
+## Build
+`npm install` then `npm run build`.
