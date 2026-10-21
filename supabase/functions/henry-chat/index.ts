@@ -62,58 +62,72 @@ If the user says "Lock it in", draft a structured specification using only decis
     "HTTP-Referer": "https://henry-v1-learning-lab.vercel.app",
     "X-Title": "Henry Engineering Intelligence",
   };
-  const defaultModel = Deno.env.get("HENRY_AI_MODEL") || "openrouter/free";
-  const plannerModel = Deno.env.get("HENRY_PLANNER_MODEL") || defaultModel;
-  const reviewerModel = Deno.env.get("HENRY_REVIEWER_MODEL") || defaultModel;
-  const synthesizerModel = Deno.env.get("HENRY_SYNTHESIZER_MODEL") || defaultModel;
-  const callModel = async (chat: Array<{role:string;content:string}>, selectedModel=defaultModel, maxTokens=900) => {
-    const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify({ model: selectedModel, messages: chat, temperature: 0.5, max_tokens: maxTokens }) });
+
+  // Prefer a concrete free model so routing behaviour is predictable.
+  // Override with HENRY_AI_MODEL if a different verified model is selected.
+  const primaryModel = Deno.env.get("HENRY_AI_MODEL") || "openai/gpt-oss-20b:free";
+  const fallbackModel = Deno.env.get("HENRY_AI_FALLBACK_MODEL") || "openrouter/free";
+
+  const callModel = async (chat: Array<{role:string;content:string}>, selectedModel: string, maxTokens=1000) => {
+    let res: Response;
+    try {
+      res = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: selectedModel, messages: chat, temperature: 0.5, max_tokens: maxTokens }),
+        signal: AbortSignal.timeout(45000),
+      });
+    } catch (networkError) {
+      console.error("OpenRouter network request failed", String(networkError));
+      throw new Error("Henry could not reach OpenRouter. Check connectivity and try again.");
+    }
+
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const error = new Error(res.status === 429 ? "The free AI provider is busy or its free quota is exhausted. Wait and try again." : "The AI provider could not complete the request. Check the key or try again shortly.");
+      const providerMessage = String(payload?.error?.message || "").slice(0, 300);
+      console.error("OpenRouter request failed", res.status, providerMessage);
+      const error = new Error(
+        res.status === 401 || res.status === 403
+          ? "The AI provider rejected its API key. Check the HENRY_AI_API_KEY secret."
+          : res.status === 429
+          ? "The free AI provider is busy or its quota is exhausted. Wait a moment and try again."
+          : `The AI provider returned HTTP ${res.status}.${providerMessage ? " " + providerMessage : ""}`
+      );
       (error as any).status = res.status;
-      console.error("OpenRouter request failed", res.status, payload?.error?.message || "");
       throw error;
     }
+
     const content = payload?.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || !content.trim()) throw new Error("The AI provider returned an empty response.");
+    if (typeof content !== "string" || !content.trim()) {
+      console.error("OpenRouter returned no text", JSON.stringify({
+        model: selectedModel,
+        finish_reason: payload?.choices?.[0]?.finish_reason,
+        response_id: payload?.id,
+        has_choices: Array.isArray(payload?.choices),
+      }));
+      throw new Error("The AI provider returned no text. Try again or switch the configured free model.");
+    }
     return content.trim();
   };
 
-  const latestUser = messages[messages.length - 1].content;
-  const recent = messages.slice(-8);
-  const runReviewPipeline = async () => {
-    const plannerPrompt = `Generate 3-5 genuinely different solution directions or interpretations for this task, not paraphrases. Include useful assumptions and trade-offs. Be concise. Task: ${latestUser}`;
-    const [candidateText] = await Promise.all([
-      callModel([{ role: "system", content: systemPrompt }, ...recent.slice(0,-1), { role: "user", content: plannerPrompt }], plannerModel, 850)
-    ]);
-    const reviewText = await callModel([
-      { role: "system", content: systemPrompt + " Act as an independent skeptical reviewer. Do not agree just to be agreeable." },
-      { role: "user", content: `User task: ${latestUser}\nReview the following options. Identify missing approaches, invalid assumptions, edge cases, contradictions, and what can be verified.\nOptions:\n${candidateText}` }
-    ], 650);
-    const finalPrompt = `Answer the user's latest message. Treat candidates as brainstorming material, not unquestionable facts. Incorporate the review, remove duplicates, correct errors, explain key trade-offs, and state uncertainty. Do not expose hidden chain-of-thought; give a concise summary of alternatives and checks where useful.\nCANDIDATES:\n${candidateText}\nINDEPENDENT REVIEW:\n${reviewText}\n\nReturn the final user-facing answer.`;
-    const reply = await callModel([{ role: "system", content: systemPrompt }, ...recent.slice(0,-1), { role: "user", content: finalPrompt }], synthesizerModel, 1200);
-    return { reply, pipeline: "three-pass" };
-  };
-
-  const simpleReply = async () => ({
-    reply: await callModel([{ role: "system", content: systemPrompt }, ...messages], defaultModel, 1200),
-    pipeline: "single-pass-fallback",
-  });
-
+  const chatMessages = [{ role: "system", content: systemPrompt }, ...messages];
   try {
-    const complex = latestUser.length > 220 || /design|architect|build|debug|compare|possibilit|algorithm|calculate|proof|plan|specification|lock it in|code|error|why|how can|alternatives|options/.test(latestUser.toLowerCase());
-    let result: { reply: string; pipeline: string };
-    if (complex) {
-      try { result = await runReviewPipeline(); }
-      catch (pipelineError) {
-        console.error("Henry review pipeline failed; falling back to one pass.", String(pipelineError));
-        result = await simpleReply();
-      }
-    } else result = await simpleReply();
-    return json({ reply: result.reply, pipeline: result.pipeline });
+    let reply: string;
+    let modelUsed = primaryModel;
+    try {
+      reply = await callModel(chatMessages, primaryModel, 1200);
+    } catch (primaryError) {
+      // Retry via OpenRouter's free-model router only when the primary model fails.
+      console.error("Henry primary model failed; trying free router.", String(primaryError));
+      modelUsed = fallbackModel;
+      reply = await callModel(chatMessages, fallbackModel, 1200);
+    }
+    return json({ reply, pipeline: "single-pass", model: modelUsed });
   } catch (error) {
-    const status = (error as any)?.status === 429 ? 429 : 502;
-    return json({ error: error instanceof Error ? error.message : "Henry could not reach the AI provider. Try again shortly." }, status);
+    const rawStatus = (error as any)?.status;
+    const status = rawStatus === 429 ? 429 : rawStatus === 401 || rawStatus === 403 ? 502 : 502;
+    const message = error instanceof Error ? error.message : "Henry could not reach the AI provider. Try again shortly.";
+    console.error("Henry AI request failed", message);
+    return json({ error: message }, status);
   }
 });
