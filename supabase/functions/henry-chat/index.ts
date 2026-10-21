@@ -62,9 +62,12 @@ If the user says "Lock it in", draft a structured specification using only decis
     "HTTP-Referer": "https://henry-v1-learning-lab.vercel.app",
     "X-Title": "Henry Engineering Intelligence",
   };
-  const model = Deno.env.get("HENRY_AI_MODEL") || "openrouter/free";
-  const callModel = async (chat: Array<{role:string;content:string}>, maxTokens=900) => {
-    const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify({ model, messages: chat, temperature: 0.5, max_tokens: maxTokens }) });
+  const defaultModel = Deno.env.get("HENRY_AI_MODEL") || "openrouter/free";
+  const plannerModel = Deno.env.get("HENRY_PLANNER_MODEL") || defaultModel;
+  const reviewerModel = Deno.env.get("HENRY_REVIEWER_MODEL") || defaultModel;
+  const synthesizerModel = Deno.env.get("HENRY_SYNTHESIZER_MODEL") || defaultModel;
+  const callModel = async (chat: Array<{role:string;content:string}>, selectedModel=defaultModel, maxTokens=900) => {
+    const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify({ model: selectedModel, messages: chat, temperature: 0.5, max_tokens: maxTokens }) });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
       const error = new Error(res.status === 429 ? "The free AI provider is busy or its free quota is exhausted. Wait and try again." : "The AI provider could not complete the request. Check the key or try again shortly.");
@@ -82,19 +85,19 @@ If the user says "Lock it in", draft a structured specification using only decis
   const runReviewPipeline = async () => {
     const plannerPrompt = `Generate 3-5 genuinely different solution directions or interpretations for this task, not paraphrases. Include useful assumptions and trade-offs. Be concise. Task: ${latestUser}`;
     const [candidateText] = await Promise.all([
-      callModel([{ role: "system", content: systemPrompt }, ...recent.slice(0,-1), { role: "user", content: plannerPrompt }], 850)
+      callModel([{ role: "system", content: systemPrompt }, ...recent.slice(0,-1), { role: "user", content: plannerPrompt }], plannerModel, 850)
     ]);
     const reviewText = await callModel([
       { role: "system", content: systemPrompt + " Act as an independent skeptical reviewer. Do not agree just to be agreeable." },
       { role: "user", content: `User task: ${latestUser}\nReview the following options. Identify missing approaches, invalid assumptions, edge cases, contradictions, and what can be verified.\nOptions:\n${candidateText}` }
     ], 650);
     const finalPrompt = `Answer the user's latest message. Treat candidates as brainstorming material, not unquestionable facts. Incorporate the review, remove duplicates, correct errors, explain key trade-offs, and state uncertainty. Do not expose hidden chain-of-thought; give a concise summary of alternatives and checks where useful.\nCANDIDATES:\n${candidateText}\nINDEPENDENT REVIEW:\n${reviewText}\n\nReturn the final user-facing answer.`;
-    const reply = await callModel([{ role: "system", content: systemPrompt }, ...recent.slice(0,-1), { role: "user", content: finalPrompt }], 1200);
+    const reply = await callModel([{ role: "system", content: systemPrompt }, ...recent.slice(0,-1), { role: "user", content: finalPrompt }], synthesizerModel, 1200);
     return { reply, pipeline: "three-pass" };
   };
 
   const simpleReply = async () => ({
-    reply: await callModel([{ role: "system", content: systemPrompt }, ...messages], 1200),
+    reply: await callModel([{ role: "system", content: systemPrompt }, ...messages], defaultModel, 1200),
     pipeline: "single-pass-fallback",
   });
 
