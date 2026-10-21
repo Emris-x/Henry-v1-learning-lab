@@ -1,12 +1,270 @@
 import './style.css';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './supabase-config.js';
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
-let currentUser = null, cloudBusy = false, cloudMessage = 'Cloud sync: sign in to enable';
-const $=s=>document.querySelector(s);const get=(k,d)=>{try{return JSON.parse(localStorage.getItem('henry-'+k))??d}catch{return d}};let tasks=get('tasks',[]),notes=get('notes',[]),events=get('events',[]),view='Dashboard';const save=()=>{tasks=tasks.map(x=>({...x,id:x.id||crypto.randomUUID()}));notes=notes.map(x=>({...x,id:x.id||crypto.randomUUID()}));events=events.map(x=>({...x,id:x.id||crypto.randomUUID()}));localStorage.setItem('henry-tasks',JSON.stringify(tasks));localStorage.setItem('henry-notes',JSON.stringify(notes));localStorage.setItem('henry-events',JSON.stringify(events));if(currentUser&&!cloudBusy)syncCloud()};
-async function syncCloud(){if(!currentUser||cloudBusy)return;cloudBusy=true;try{const uid=currentUser.id;const taskRows=tasks.map(t=>({id:t.id,user_id:uid,title:t.title,subject:t.subject||'General',objective:t.description||'',status:({'in progress':'in_progress','queued':'queued','completed':'completed','failed':'failed','paused':'paused'}[t.status]||'queued'),progress:Number(t.progress)||0}));const noteRows=notes.map(n=>({id:n.id,user_id:uid,task_id:null,title:n.title||'Note',subject:n.subject||'General',content:n.body||'',source_type:'user_note',source_url:null}));const eventRows=events.map(e=>({id:e.id,user_id:uid,task_id:null,message:e.text||'',created_at:e.at&& !Number.isNaN(Date.parse(e.at))?new Date(e.at).toISOString():new Date().toISOString()}));for(const [table,rows] of [['learning_tasks',taskRows],['knowledge_items',noteRows],['learning_events',eventRows]]){if(rows.length){const {error}=await supabase.from(table).upsert(rows,{onConflict:'id'});if(error)throw error}}cloudMessage='Cloud sync: saved';const el=$('#cloudstatus');if(el)el.textContent=cloudMessage}catch(e){cloudMessage='Cloud sync error: '+(e.message||'check connection');const el=$('#cloudstatus');if(el)el.textContent=cloudMessage;console.error('Henry cloud sync',e)}finally{cloudBusy=false}}
-async function loadCloud(){if(!currentUser)return;cloudBusy=true;try{const uid=currentUser.id;const [tr,nr,er]=await Promise.all([supabase.from('learning_tasks').select('*').eq('user_id',uid),supabase.from('knowledge_items').select('*').eq('user_id',uid),supabase.from('learning_events').select('*').eq('user_id',uid).order('created_at',{ascending:false}).limit(100)]);for(const x of [tr,nr,er])if(x.error)throw x.error;const cloudTasks=(tr.data||[]).map(t=>({id:t.id,title:t.title,subject:t.subject,description:t.objective,status:t.status==='in_progress'?'in progress':t.status,progress:t.progress||0}));const cloudNotes=(nr.data||[]).map(n=>({id:n.id,title:n.title,subject:n.subject,body:n.content,at:n.created_at?new Date(n.created_at).toLocaleDateString():''}));const cloudEvents=(er.data||[]).map(e=>({id:e.id,text:e.message,at:e.created_at?new Date(e.created_at).toLocaleString():''}));tasks=[...cloudTasks,...tasks.filter(x=>!cloudTasks.some(y=>y.id===x.id))];notes=[...cloudNotes,...notes.filter(x=>!cloudNotes.some(y=>y.id===x.id))];events=[...cloudEvents,...events.filter(x=>!cloudEvents.some(y=>y.id===x.id))].slice(0,100);cloudMessage='Cloud sync: connected';save();shell()}catch(e){cloudMessage='Cloud sync error: '+(e.message||'load failed');console.error('Henry cloud load',e)}finally{cloudBusy=false;const el=$('#cloudstatus');if(el)el.textContent=cloudMessage}}const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));const log=s=>{events.unshift({text:s,at:new Date().toLocaleString()});events=events.slice(0,100);save()};function shell(){ $('#app').innerHTML=`<aside><div class="brand"><div class="mark">H</div><div><b>HENRY <i>V1</i></b><small>LEARNING LAB</small></div></div><p class="label">WORKSPACE</p><nav>${['Dashboard','Objectives','Knowledge library','Learning journal','Learning chat'].map(v=>`<button class="nav ${view===v?'active':''}" data-view="${v}">${({Dashboard:'◫',Objectives:'◎','Knowledge library':'▤','Learning journal':'◷','Learning chat':'✳'})[v]} &nbsp; ${v}</button>`).join('')}</nav><div class="sidefoot"><span class="dot"></span> Local memory active<small id="cloudstatus">${esc(cloudMessage)}</small></div></aside><main><header><span>Henry / <b>${view}</b></span><span class="live"><span class="dot"></span> Workspace ready</span><button class="secondary" id="accountbtn">${currentUser?esc(currentUser.email||"Account"):"Sign in / Sync"}</button></header><section class="page">${content()}</section></main><div id="modal"></div>`;document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view=b.dataset.view;shell()});bind()}
-function content(){if(view==='Dashboard')return `<div class="hero"><div><p class="eyebrow">YOUR PERSONAL LEARNING SYSTEM</p><h1>Build knowledge.<br><em>One objective at a time.</em></h1><p>Set a goal, save references and track the knowledge you build.</p></div><button class="primary" id="new">＋ New objective</button></div><div class="stats"><article><small>OBJECTIVES</small><strong>${tasks.length}</strong><p>Learning goals</p></article><article><small>AVERAGE PROGRESS</small><strong>${tasks.length?Math.round(tasks.reduce((a,t)=>a+t.progress,0)/tasks.length):0}%</strong><p>Manually recorded</p></article><article><small>KNOWLEDGE NOTES</small><strong>${notes.length}</strong><p>Saved in this browser</p></article><article><small>JOURNAL EVENTS</small><strong>${events.length}</strong><p>Activity history</p></article></div><div class="columns"><section class="panel"><div class="panelhead"><div><h2>Learning objectives</h2><p>Pick up where you left off</p></div><button class="link" data-view="Objectives">View all ↗</button></div>${tasklist(4)}</section><section class="panel"><div class="panelhead"><div><h2>Recent activity</h2><p>Your learning journal</p></div></div>${eventlist(5)}<p class="disclaimer">ⓘ This foundation does not yet run autonomous AI research. Progress is recorded manually.</p></section></div><section class="banner"><b>Learn it. Test it. Keep it.</b><p>Finishing a document is not proof of mastery. Henry's next milestone is a real research and evaluation pipeline.</p></section>`;if(view==='Objectives')return `<div class="subhead"><div><p class="eyebrow">TASK MANAGEMENT</p><h1>Learning objectives</h1><p>Define what Henry should learn and track progress.</p></div><button class="primary" id="new">＋ New objective</button></div>${tasklist()}`;if(view==='Knowledge library')return `<div class="subhead"><div><p class="eyebrow">PERSISTENT KNOWLEDGE</p><h1>Knowledge library</h1><p>Store searchable lessons, corrections and source excerpts.</p></div></div><div class="columns"><section class="panel"><h2>Save a note</h2><form id="noteform"><label>Title<input name="title" required placeholder="e.g. Python functions"></label><label>Subject<input name="subject" placeholder="Python, C++, mathematics"></label><label>Lesson<textarea name="body" required rows="6" placeholder="Write the concept or correction Henry should retain…"></textarea></label><button class="primary">Save knowledge</button></form><hr><label class="upload">Import text/markdown/code file<input id="file" type="file" accept=".txt,.md,.py,.js,.json,.csv"></label><p class="muted">PDF parsing is not connected yet. No file is uploaded to a server in this prototype.</p></section><section><input id="search" class="search" placeholder="Search saved knowledge…"><div id="noteslist">${notelist(notes)}</div></section></div>`;if(view==='Learning journal')return `<div class="subhead"><div><p class="eyebrow">HISTORY & REFLECTION</p><h1>Learning journal</h1><p>Review recorded actions and export your local data.</p></div><button class="secondary" id="export">↓ Export JSON</button></div><section class="panel">${eventlist()}</section>`;return `<div class="subhead"><div><p class="eyebrow">CONVERSATION & TEACHING</p><h1>Learning chat</h1><p>Record a concept or correction. Real model responses are not connected yet.</p></div></div><section class="panel chat"><h2>Teach Henry something</h2><p class="muted">This prototype stores your teaching as a knowledge note. It does not claim that a model has trained itself.</p><form id="chatform"><textarea name="message" rows="4" required placeholder="Explain a concept or tell Henry what to remember…"></textarea><button class="primary">Save teaching note</button></form><div id="chatresult"></div></section>`}
-function tasklist(limit=999){if(!tasks.length)return '<div class="empty">No objectives yet. Create your first learning goal.</div>';return '<div class="tasklist">'+tasks.slice(0,limit).map(t=>`<article class="task"><div class="tasktop"><div><h3>${esc(t.title)}</h3><small>${esc(t.subject)} · ${esc(t.status)}</small></div><b>${t.progress}%</b></div><p>${esc(t.description||'No success criteria yet.')}</p><div class="track"><span style="width:${t.progress}%"></span></div><div class="taskactions"><button data-step="${t.id}">Record +10%</button><button data-done="${t.id}">Mark complete</button></div></article>`).join('')+'</div>'}function notelist(arr){return arr.length?arr.map(n=>`<article class="note"><small>${esc(n.subject)} · ${esc(n.at)}</small><h3>${esc(n.title)}</h3><p>${esc(n.body)}</p></article>`).join(''):'<div class="empty">No saved notes yet.</div>'}function eventlist(limit=999){return events.length?'<div class="events">'+events.slice(0,limit).map(e=>`<div class="event"><span class="dot"></span><div>${esc(e.text)}<small>${esc(e.at)}</small></div></div>`).join('')+'</div>':'<div class="empty">Your recorded activity will appear here.</div>'}
-function bind(){const n=$('#new');if(n)n.onclick=()=>{ $('#modal').innerHTML=`<div class="overlay"><form class="dialog" id="taskform"><div class="tasktop"><h2>New learning objective</h2><button type="button" id="close">✕</button></div><label>Objective title<input name="title" required placeholder="Learn C++ fundamentals"></label><label>Subject<input name="subject" placeholder="C++, Python, mathematics"></label><label>Success criteria<textarea name="description" rows="3" placeholder="What should you be able to explain or build?"></textarea></label><button class="primary">Create objective</button></form></div>`;$('#close').onclick=()=>$('#modal').innerHTML='';$('#taskform').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);tasks.unshift({id:crypto.randomUUID(),title:f.get('title'),subject:f.get('subject')||'General',description:f.get('description'),status:'queued',progress:0});log('Created objective: '+f.get('title'));save();shell()}};document.querySelectorAll('[data-step]').forEach(b=>b.onclick=()=>{const t=tasks.find(t=>t.id===b.dataset.step);t.progress=Math.min(100,t.progress+10);t.status=t.progress===100?'completed':'in progress';log('Manually updated progress: '+t.title+' ('+t.progress+'%)');save();shell()});document.querySelectorAll('[data-done]').forEach(b=>b.onclick=()=>{const t=tasks.find(t=>t.id===b.dataset.done);t.progress=100;t.status='completed';log('Marked complete (manual): '+t.title);save();shell()});const nf=$('#noteform');if(nf)nf.onsubmit=e=>{e.preventDefault();const f=new FormData(nf);notes.unshift({title:f.get('title'),subject:f.get('subject')||'General',body:f.get('body'),at:new Date().toLocaleDateString()});log('Saved knowledge note: '+f.get('title'));save();shell()};const file=$('#file');if(file)file.onchange=async()=>{const f=file.files[0];if(!f)return;const body=await f.text();notes.unshift({title:f.name,subject:'Imported reference',body,at:new Date().toLocaleDateString()});log('Imported text reference: '+f.name);save();shell()};const search=$('#search');if(search)search.oninput=()=>$('#noteslist').innerHTML=notelist(notes.filter(n=>(n.title+n.subject+n.body).toLowerCase().includes(search.value.toLowerCase())));const cf=$('#chatform');if(cf)cf.onsubmit=e=>{e.preventDefault();const text=new FormData(cf).get('message');notes.unshift({title:'Teaching note',subject:'User teaching',body:text,at:new Date().toLocaleDateString()});log('Saved a teaching note');save();$('#chatresult').innerHTML='<p class="success">Saved to local knowledge. A reasoning model is not connected, so this is memory storage—not model-weight training.</p>';cf.reset()};const account=$('#accountbtn');if(account)account.onclick=()=>{if(currentUser){$('#modal').innerHTML=`<div class="overlay"><div class="dialog"><div class="tasktop"><h2>Henry account</h2><button id="authclose">✕</button></div><p>Signed in as <b>${esc(currentUser.email)}</b></p><p class="muted">Your objectives, knowledge notes and journal events sync to your private Supabase account.</p><button class="secondary" id="syncnow">Sync now</button> <button class="primary" id="signout">Sign out</button></div></div>`;$('#authclose').onclick=()=>$('#modal').innerHTML='';$('#syncnow').onclick=()=>syncCloud();$('#signout').onclick=async()=>{await supabase.auth.signOut();$('#modal').innerHTML=''}}else{$('#modal').innerHTML=`<div class="overlay"><form class="dialog" id="authform"><div class="tasktop"><h2>Connect your Henry account</h2><button type="button" id="authclose">✕</button></div><p class="muted">Create an account or sign in to sync your learning data across devices.</p><label>Email<input name="email" type="email" required autocomplete="email" placeholder="you@example.com"></label><label>Password<input name="password" type="password" required minlength="6" autocomplete="current-password" placeholder="At least 6 characters"></label><button class="primary" type="submit">Sign in</button><button class="secondary" type="button" id="signup">Create account</button><p id="authmsg" class="muted"></p></form></div>`;$('#authclose').onclick=()=>$('#modal').innerHTML='';const f=$('#authform');f.onsubmit=async e=>{e.preventDefault();const d=new FormData(f),msg=$('#authmsg');msg.textContent='Signing in…';const {data,error}=await supabase.auth.signInWithPassword({email:String(d.get('email')||'').trim(),password:d.get('password')});if(error){msg.textContent=error.message.toLowerCase().includes('email not confirmed')?'This email still needs confirmation. Use the confirmation link in your inbox, or check Supabase Auth settings.':error.message;return}currentUser=data.user;$('#modal').innerHTML='';cloudMessage='Signed in — loading your cloud data…';shell();await loadCloud()};$('#signup').onclick=async()=>{const d=new FormData(f),msg=$('#authmsg');msg.textContent='Creating account…';const {data,error}=await supabase.auth.signUp({email:String(d.get('email')||'').trim(),password:d.get('password')});if(error){msg.textContent=error.message;return}if(data.session){currentUser=data.user;$('#modal').innerHTML='';cloudMessage='Account created — loading your cloud data…';shell();await loadCloud()}else{msg.textContent='Account created. If email confirmation is enabled, confirm the email first, then return here to sign in.'}}}};const ex=$('#export');if(ex)ex.onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify({tasks,notes,events},null,2)],{type:'application/json'}));a.download='henry-v1-learning-data.json';a.click();URL.revokeObjectURL(a.href)}}
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});shell();supabase.auth.getSession().then(({data})=>{currentUser=data.session?.user||null;if(currentUser)loadCloud();else{cloudMessage='Cloud sync: sign in to enable';shell()}});supabase.auth.onAuthStateChange((_event,session)=>{const next= session?.user||null;const changed=next?.id!==currentUser?.id;currentUser=next;if(changed){if(currentUser)loadCloud();else{cloudMessage='Cloud sync: sign in to enable';shell()}}});
+const $ = (s, root=document) => root.querySelector(s);
+const uid = () => crypto.randomUUID();
+const read = (key, fallback) => { try { return JSON.parse(localStorage.getItem('henry-v1-'+key)) ?? fallback; } catch { return fallback; } };
+let user = null;
+let cloudBusy = false;
+let projects = read('projects', []);
+let activeId = read('active-project', null);
+let mode = 'Explore';
+let appSection = 'home';
+let theme = localStorage.getItem('henry-v1-theme') || 'dark';
+let buildEvents = [{time:new Date().toISOString(),text:'Henry workspace initialised',kind:'system'}];
+let messagesByProject = read('messages', {});
+let ideaMessagesByUser = read('idea-messages', {});
+const ideaOwnerKey = () => user?.id || 'guest';
+const ideaMessages = () => ideaMessagesByUser[ideaOwnerKey()] || [];
+const saveIdeaMessages = () => { ideaMessagesByUser[ideaOwnerKey()] = ideaMessagesByUser[ideaOwnerKey()] || []; localStorage.setItem('henry-v1-idea-messages', JSON.stringify(ideaMessagesByUser)); };
+let authMode = 'signin';
+let busy = false;
+
+const escapeHtml = (value='') => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const persist = () => {
+  localStorage.setItem('henry-v1-projects', JSON.stringify(projects));
+  localStorage.setItem('henry-v1-active-project', JSON.stringify(activeId));
+  localStorage.setItem('henry-v1-messages', JSON.stringify(messagesByProject));
+};
+const visibleProjects = () => projects.filter(p => user ? p.userId === user.id : !p.userId);
+const activeProject = () => visibleProjects().find(p => p.id === activeId) || null;
+const setStatus = text => { const el = $('#status'); if (el) el.textContent = text; };
+
+async function refreshUser() {
+  const { data } = await supabase.auth.getSession();
+  user = data.session?.user ?? null;
+  supabase.auth.onAuthStateChange((_event, session) => {
+    user = session?.user ?? null;
+    // A signed-out session must never keep displaying the previous account's
+    // active private project. Preserve its stored data for the next sign-in.
+    if (!user) {
+      appSection = 'home';
+      activeId = null;
+      persist();
+      const authOverlay = $('#auth-overlay');
+      const projectOverlay = $('#project-overlay');
+      if (authOverlay) authOverlay.hidden = true;
+      if (projectOverlay) projectOverlay.hidden = true;
+      render();
+      return;
+    }
+    // Auth events can fire during signup and replace #app.innerHTML.
+    // Keep onboarding forms alive while the account is being set up.
+    const onboardingInProgress =
+      Boolean(localStorage.getItem('henry-v1-pending-project')) ||
+      Boolean(localStorage.getItem('henry-v1-pending-experience-level')) ||
+      ($('#project-overlay') && !$('#project-overlay').hidden) ||
+      ($('#auth-overlay') && !$('#auth-overlay').hidden);
+    if (!onboardingInProgress) render();
+    if (user && !onboardingInProgress) syncCloud();
+  });
+}
+async function syncCloud() {
+  if (!user || cloudBusy) return;
+  cloudBusy = true;
+  const syncingUserId = user.id;
+  try {
+    for (const p of projects.filter(item => item.userId === syncingUserId)) {
+      const { error } = await supabase.from('henry_projects').upsert({ id:p.id, user_id:syncingUserId, title:p.title, goal:p.goal||'', created_at:p.createdAt||new Date().toISOString(), updated_at:p.updatedAt||new Date().toISOString() }, { onConflict:'id' });
+      if (error) throw error;
+    }
+    for (const [projectId, list] of Object.entries(messagesByProject)) {
+      if (!projects.some(p => p.id === projectId && p.userId === syncingUserId)) continue;
+      for (const m of list) {
+        const { error } = await supabase.from('henry_project_messages').upsert({ id:m.id, project_id:projectId, user_id:syncingUserId, role:m.role, mode:['Explore','Teach','Build'].includes(m.mode)?m.mode:'Explore', content:m.content, created_at:m.createdAt||new Date().toISOString() }, { onConflict:'id' });
+        if (error) throw error;
+      }
+    }
+    const { data: cloudProjects, error: projectsError } = await supabase.from('henry_projects').select('id,title,goal,created_at,updated_at').order('updated_at',{ascending:false});
+    if (projectsError) throw projectsError;
+    const { data: cloudMessages, error: messagesError } = await supabase.from('henry_project_messages').select('id,project_id,role,mode,content,created_at').order('created_at',{ascending:true});
+    if (messagesError) throw messagesError;
+    if (!user || user.id !== syncingUserId) return;
+    const projectMap = new Map(projects.filter(p => p.userId !== syncingUserId).map(p=>[p.id,p]));
+    for (const row of (cloudProjects||[])) projectMap.set(row.id,{id:row.id,userId:syncingUserId,title:row.title,goal:row.goal||'',createdAt:row.created_at,updatedAt:row.updated_at});
+    projects = [...projectMap.values()].sort((a,b)=>new Date(b.updatedAt||0)-new Date(a.updatedAt||0));
+    const messageMap = {}; for (const p of projects) messageMap[p.id] = p.userId === syncingUserId ? (messagesByProject[p.id]||[]) : [];
+    for (const row of (cloudMessages||[])) { const list=messageMap[row.project_id]||(messageMap[row.project_id]=[]); const mapped={id:row.id,role:row.role,mode:row.mode,content:row.content,createdAt:row.created_at}; const idx=list.findIndex(m=>m.id===row.id); if(idx>=0)list[idx]=mapped;else list.push(mapped); }
+    messagesByProject = messageMap;
+    if (!visibleProjects().some(p=>p.id===activeId)) activeId=visibleProjects()[0]?.id||null;
+    persist(); render();
+  } catch (error) { console.warn('Henry cloud sync failed:',error); }
+  finally { cloudBusy=false; }
+}
+
+function newProject(title='Untitled engineering project', goal='') {
+  appSection='chat';
+  buildEvents.unshift({time:new Date().toISOString(),text:'Opened project workspace: '+title,kind:'project'});
+  const project = { id: uid(), userId: user?.id || null, title, goal, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  projects.unshift(project);
+  activeId = project.id;
+  messagesByProject[project.id] = [];
+  persist(); render(); if (user) syncCloud();
+}
+function startNewProject() {
+  // New project creation is an account-only action. Ask guests to sign up
+  // immediately; collect the project name and brief only after authentication.
+  if (!user) {
+    openAuth('signup');
+    return;
+  }
+  showProjectForm();
+}
+function openAuth(mode='signin') {
+  authMode = mode;
+  const overlay = $('#auth-overlay');
+  overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><button class="icon-button close" id="auth-close" aria-label="Close">×</button><div class="brand-mark">H</div><p class="eyebrow">HENRY ACCOUNT</p><h2>${mode==='signup'?'Create your account':'Welcome back'}</h2><p class="muted-text">Sign in to prepare your workspace for cloud sync.</p><form id="auth-form"><label>Email<input name="email" type="email" autocomplete="email" required maxlength="254"></label><label>Password<input name="password" type="password" autocomplete="${mode==='signup'?'new-password':'current-password'}" required minlength="6"></label><button class="primary full" type="submit">${mode==='signup'?'Create account':'Sign in'}</button><p id="auth-feedback" class="feedback" aria-live="polite"></p></form><button class="text-button" id="auth-switch">${mode==='signup'?'Already have an account? Sign in':'New to Henry? Create an account'}</button></div>`;
+  overlay.hidden = false;
+  $('#auth-close').onclick = () => overlay.hidden = true;
+  $('#auth-switch').onclick = () => openAuth(mode==='signup'?'signin':'signup');
+  $('#auth-form').onsubmit = async e => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget), email = fd.get('email'), password = fd.get('password');
+    const feedback = $('#auth-feedback'); feedback.textContent = 'Connecting securely…';
+    const result = mode==='signup'
+      ? await supabase.auth.signUp({ email, password })
+      : await supabase.auth.signInWithPassword({ email, password });
+    if (result.error) { feedback.textContent = result.error.message; return; }
+    if (mode==='signup' && !result.data.session) {
+      feedback.textContent = 'Account request received. Check your email if confirmation is enabled, then return here and sign in to continue.';
+    } else {
+      user = result.data.user ?? result.data.session?.user ?? null;
+      overlay.hidden = true;
+      if (mode==='signup' || (user && !user.user_metadata?.experience_level)) showExperiencePicker();
+      else if (user && localStorage.getItem('henry-v1-pending-project')) finishPendingProject();
+      else { render(); if (user) syncCloud(); }
+    }
+  };
+}
+function render() {
+  const project = activeProject();
+  const showChat = appSection === 'chat' && Boolean(project);
+  const showIdeaChat = appSection === 'idea-chat';
+  document.documentElement.dataset.theme = theme;
+  const messages = project ? (messagesByProject[project.id] || []) : [];
+  const chatMessages = showIdeaChat ? ideaMessages() : messages;
+  $('#app').innerHTML = `
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark">H</div><div><strong>HENRY</strong><small>ENGINEERING INTELLIGENCE</small></div></div>
+      <button class="new-project" id="new-project"><span>＋</span> New project</button>
+      <p class="section-label">YOUR WORKSPACE</p>
+      <div class="project-list">${visibleProjects().length ? visibleProjects().map(p=>`<button class="project-link ${p.id===activeId?'selected':''}" data-project="${p.id}"><span class="project-glyph">◈</span><span>${escapeHtml(p.title)}</span></button>`).join('') : '<p class="sidebar-empty">Your projects will appear here.</p>'}</div>
+      <div class="sidebar-bottom"><div class="engine-state"><span class="state-dot"></span><div><strong>AI engine</strong><small>Not connected yet</small></div></div><button id="account-button" class="account-button"><span class="avatar">${user?escapeHtml((user.email||'U')[0].toUpperCase()):'G'}</span><span><strong>${user?escapeHtml(user.email):'Guest workspace'}</strong><small>${user?'Signed in':'Sign in to your account'}</small></span><span class="more">···</span></button></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div class="crumb"><span>Workspace</span><span class="slash">/</span><strong>${showIdeaChat?'Idea chat':project?escapeHtml(project.title):appSection==='build'?'Build console':appSection==='settings'?'Settings':'Overview'}</strong></div><div class="top-actions"><span class="connection"><i></i> Local workspace</span><button class="avatar small-avatar" id="top-account" aria-label="Account">${user?escapeHtml((user.email||'U')[0].toUpperCase()):'G'}</button></div></header>
+      ${showIdeaChat ? `
+        <section class="work-area idea-work-area">
+          <div class="idea-chat-heading"><div><p class="eyebrow">HENRY / IDEA LAB</p><h1>Think out loud.</h1><p>Explore random ideas, ask questions, and shape possibilities before creating a project.</p></div><button class="quiet-button" id="idea-to-project" ${ideaMessages().some(m=>m.role==='user')?'':'disabled'}>Turn into project ↗</button></div>
+          <div class="chat-panel idea-chat-panel">
+            <div class="conversation" id="conversation">
+              ${chatMessages.length ? chatMessages.map(m=>`<article class="message ${m.role==='user'?'user-message':'assistant-message'}"><div class="message-avatar">${m.role==='user'?'YOU':'H'}</div><div class="message-content"><div class="message-author">${m.role==='user'?'You':'Henry'}</div><p>${escapeHtml(m.content).replace(/\\n/g,'<br>')}</p></div></article>`).join('') : `<div class="welcome"><div class="welcome-symbol">H</div><p class="eyebrow">HENRY / OPEN THINKING</p><h2>What’s on your mind?</h2><p>No project required. Explore a strange question, brainstorm a new invention, learn something, or test an idea. When it becomes something you want to build, carry it into a project.</p><div class="starter-prompts"><button data-prompt="Help me brainstorm three unusual ideas for a useful mobile app.">Brainstorm ideas <span>↗</span></button><button data-prompt="I have a random idea. Ask me questions to help me explore it.">Explore a random thought <span>↗</span></button><button data-prompt="Teach me something surprising about science or engineering.">Teach me something <span>↗</span></button></div></div>`}
+            </div>
+            <form class="composer" id="composer"><textarea id="message-input" rows="2" maxlength="8000" placeholder="Ask anything. Explore an idea… ${busy?'':'(no project needed)'}" ${busy?'disabled':''}></textarea><div class="composer-bottom"><span>Enter to send · Shift + Enter for a new line</span><button class="send-button" type="submit" ${busy?'disabled':''}>Send <span>↑</span></button></div></form>
+          </div>
+          <p class="privacy-note">Idea chat is separate from your project workspaces. You can turn a discussion into a project whenever you're ready.</p>
+        </section>
+      ` : showChat ? `
+        <section class="work-area">
+          <div class="project-heading"><div><p class="eyebrow">ENGINEERING WORKSPACE</p><h1>${escapeHtml(project.title)}</h1><p class="project-goal">${escapeHtml(project.goal||'Describe your idea and build its foundation here.')}</p></div><button class="quiet-button" id="edit-project">Project details ↗</button></div>
+          <div class="mode-row"><span class="mode-label">WORKING MODE</span>${['Explore','Teach','Build'].map(m=>`<button class="mode-chip ${m===mode?'active':''}" data-mode="${m}">${m==='Explore'?'◉':m==='Teach'?'⌘':'⌁'} &nbsp;${m}</button>`).join('')}<span class="mode-hint">${mode==='Explore'?'Clarify the idea and test assumptions':mode==='Teach'?'Learn concepts step by step':'Plan and work through implementation'}</span></div>
+          <div class="chat-panel">
+            <div class="conversation" id="conversation">
+              ${messages.length ? messages.map(m=>`<article class="message ${m.role==='user'?'user-message':'assistant-message'}"><div class="message-avatar">${m.role==='user'?'YOU':'H'}</div><div class="message-content"><div class="message-author">${m.role==='user'?'You':'Henry'} <span>${escapeHtml(m.mode||'')}</span></div><p>${escapeHtml(m.content).replace(/\n/g,'<br>')}</p></div></article>`).join('') : `<div class="welcome"><div class="welcome-symbol">H</div><p class="eyebrow">IDEA → UNDERSTANDING → REALITY</p><h2>What are we building?</h2><p>Start with an idea, a problem, or a question. We'll establish the foundations before rushing into code.</p><div class="starter-prompts"><button data-prompt="Help me refine my idea and identify the biggest unanswered questions.">Refine my idea <span>↗</span></button><button data-prompt="Teach me the core concepts I need to understand before building this.">Teach me the foundations <span>↗</span></button><button data-prompt="Help me turn this idea into a practical engineering plan.">Create an engineering plan <span>↗</span></button></div><p class="engine-notice"><span class="state-dot"></span> AI responses are not active yet. Your messages can be drafted here, but Henry will not pretend to answer until an engine is connected.</p></div>`}
+            </div>
+            <form class="composer" id="composer"><textarea id="message-input" rows="2" maxlength="8000" placeholder="Describe your idea or ask an engineering question…" ${busy?'disabled':''}></textarea><div class="composer-bottom"><span>Enter to send · Shift + Enter for a new line</span><button class="send-button" type="submit" ${busy?'disabled':''}>Send <span>↑</span></button></div></form>
+          </div>
+          <p class="privacy-note">Your project is saved in this workspace. Sign in to sync it across sessions. Henry's AI engine is not connected yet.</p>
+        </section>
+      ` : appSection === 'build' ? `
+        <section class="overview build-screen"><p class="eyebrow">HENRY / BUILD CONSOLE</p><h1>Watch ideas become systems.</h1><p class="muted-text">A live view of what Henry is doing. Events are only shown when the app records an action.</p><div class="terminal-panel"><div class="terminal-head"><span class="terminal-lights">● ● ●</span><strong>HENRY.RUNTIME</strong><span class="runtime-state">${busy?'PROCESSING':'STANDBY'}</span></div><div class="terminal-lines">${buildEvents.slice(-24).map((event,i)=>`<p class="terminal-line"><span>${String(i+1).padStart(2,'0')}</span><time>${new Date(event.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</time><b class="${escapeHtml(event.kind)}">${escapeHtml(event.kind.toUpperCase())}</b>${escapeHtml(event.text)}</p>`).join('')}<p class="terminal-cursor">▌ <span>${busy?'Working on your request…':'Waiting for your next instruction.'}</span></p></div></div><button class="secondary" id="build-home">← Back home</button></section>
+      ` : appSection === 'settings' ? `
+        <section class="overview settings-screen"><p class="eyebrow">PREFERENCES</p><h1>Make Henry yours.</h1><p class="muted-text">Appearance and workspace preferences.</p><article class="setting-card"><div><strong>Appearance</strong><p>Choose the colour scheme for your workspace.</p></div><div class="theme-switch"><button class="theme-choice ${theme==='dark'?'selected':''}" data-theme-choice="dark">◐ Dark</button><button class="theme-choice ${theme==='light'?'selected':''}" data-theme-choice="light">☼ Light</button></div></article><article class="setting-card"><div><strong>Account</strong><p>${user?'Signed in as '+escapeHtml(user.email):'Sign in to save projects to your account.'}</p></div><button class="secondary" id="settings-account">${user?'Manage account':'Sign in'}</button></article><button class="secondary" id="settings-home">← Back home</button></section>
+      ` : `
+        <section class="overview">
+          <div class="hero"><div><p class="eyebrow">YOUR ENGINEERING SPACE</p><h1>Ideas deserve<br><em>to become real.</em></h1><p>Think clearly. Learn deeply. Build with purpose.</p></div><button class="primary" id="hero-new">＋ Start a project</button></div>
+          <div class="overview-grid"><article class="overview-card"><span class="card-icon">◉</span><p class="eyebrow">01 / EXPLORE</p><h2>Establish the idea.</h2><p>Clarify the problem, assumptions, requirements, and what success means.</p></article><article class="overview-card"><span class="card-icon">⌘</span><p class="eyebrow">02 / TEACH</p><h2>Understand the why.</h2><p>Learn the concepts and terminology behind the engineering decisions.</p></article><article class="overview-card"><span class="card-icon">⌁</span><p class="eyebrow">03 / BUILD</p><h2>Move toward reality.</h2><p>Turn sound foundations into a practical implementation plan.</p></article></div>
+          <div class="projects-heading"><div><p class="eyebrow">PREVIOUS PROJECTS</p><h2>Pick up where you left off</h2></div><span class="project-count">${visibleProjects().length} ${visibleProjects().length===1?'project':'projects'}</span></div>
+          <div class="project-grid">${visibleProjects().length?visibleProjects().map(p=>`<button class="project-card" data-project="${p.id}"><span class="card-icon">◈</span><h3>${escapeHtml(p.title)}</h3><p>${escapeHtml(p.goal||'No project brief yet.')}</p><span class="open-project">Open workspace ↗</span></button>`).join(''):'<div class="empty-projects"><div class="empty-mark">＋</div><strong>Your first project starts with an idea.</strong><p>Create a workspace to organise your thinking and engineering decisions.</p><button class="secondary" id="empty-new">Create your first project</button></div>'}</div>
+          <div class="build-notice"><div><span class="state-dot"></span><strong>Foundation stage</strong></div><p>Project workspaces are being established first. The online AI engine and cloud conversation storage will be connected in the next implementation steps.</p></div>
+        </section>
+      `}
+    </main>
+    ${!showChat ? `<nav class="bottom-nav" aria-label="Main navigation"><button class="nav-item ${appSection==='home'?'active':''}" data-section="home"><span>⌂</span><small>Home</small></button><button class="nav-item ${appSection==='idea-chat'?'active':''}" data-section="idea-chat"><span>✳</span><small>Chat</small></button><button class="nav-item ${appSection==='build'?'active':''}" data-section="build"><span>⌘</span><small>Build</small></button><button class="nav-item ${appSection==='settings'?'active':''}" data-section="settings"><span>⚙</span><small>Settings</small></button></nav>` : ''}
+    <div id="auth-overlay" class="overlay" hidden></div><div id="project-overlay" class="overlay" hidden></div>
+  `;
+  $('#new-project').onclick = startNewProject;
+  document.querySelectorAll('[data-section]').forEach(b=>b.addEventListener('click',()=>{appSection=b.dataset.section;activeId=null;persist();render();}));
+  document.querySelectorAll('[data-theme-choice]').forEach(b=>b.addEventListener('click',()=>{theme=b.dataset.themeChoice;localStorage.setItem('henry-v1-theme',theme);render();}));
+  $('#build-home')?.addEventListener('click',()=>{appSection='home';activeId=null;render()});
+  $('#settings-home')?.addEventListener('click',()=>{appSection='home';activeId=null;render()});
+  $('#settings-account')?.addEventListener('click',()=>user?showAccountMenu():openAuth('signin'));
+  $('#hero-new')?.addEventListener('click', startNewProject);
+  $('#empty-new')?.addEventListener('click', startNewProject);
+  document.querySelectorAll('[data-project]').forEach(b=>b.addEventListener('click',()=>{activeId=b.dataset.project;appSection='chat';persist();render()}));
+  document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{mode=b.dataset.mode;render()}));
+  document.querySelectorAll('[data-prompt]').forEach(b=>b.addEventListener('click',()=>{ $('#message-input').value=b.dataset.prompt; $('#message-input').focus(); }));
+  $('#account-button').onclick = () => user ? showAccountMenu() : openAuth('signin');
+  $('#top-account').onclick = () => user ? showAccountMenu() : openAuth('signin');
+   $('#edit-project')?.addEventListener('click',()=>showProjectForm(project));
+  $('#idea-to-project')?.addEventListener('click',()=>{const transcript=ideaMessages().map(m=>`${m.role==='user'?'User':'Henry'}: ${m.content}`).join('\\n\\n');const first=ideaMessages().find(m=>m.role==='user')?.content||'An idea explored in Henry Idea Lab';const title=first.split(/[.!?\\n]/)[0].trim().slice(0,80)||'Idea from Henry Chat';if(!user){openAuth('signin');return;}newProject(title, 'Created from Henry Idea Lab discussion.\\n\\nDiscussion notes:\\n'+transcript.slice(0,1800));});
+  $('#composer')?.addEventListener('submit', async e=>{e.preventDefault(); const text=$('#message-input').value.trim(); if(!text||busy)return; if(showIdeaChat){if(!user){openAuth('signin');return;} const owner=ideaOwnerKey(); ideaMessagesByUser[owner] ||= []; ideaMessagesByUser[owner].push({id:uid(),role:'user',content:text,createdAt:new Date().toISOString()}); buildEvents.unshift({time:new Date().toISOString(),text:'Idea Lab message submitted',kind:'input'}); busy=true; saveIdeaMessages(); render(); try {const {data,error}=await supabase.functions.invoke('henry-chat',{body:{project:{title:'Henry Idea Lab',goal:'Open-ended brainstorming and learning. No project has been created yet.'},mode:'Explore',experienceLevel:user.user_metadata?.experience_level||'beginner',messages:ideaMessagesByUser[owner].slice(-20).map(m=>({role:m.role,content:m.content}))}});if(error)throw error;if(!data?.reply)throw new Error(data?.error||'Henry did not receive a response.');if(!user||user.id!==owner)return;ideaMessagesByUser[owner].push({id:uid(),role:'assistant',content:data.reply,createdAt:new Date().toISOString()});buildEvents.unshift({time:new Date().toISOString(),text:'Idea Lab response received',kind:'success'});}catch(error){console.warn('Henry Idea Lab request failed:',error);let detail=String(error.message||error);try{if(error.context instanceof Response){const body=await error.context.clone().json();if(body?.error)detail=String(body.error);}}catch{}if(user&&user.id===owner)ideaMessagesByUser[owner].push({id:uid(),role:'assistant',content:'Henry could not complete that request. Your idea is still saved here.\\n\\nTechnical detail: '+detail.slice(0,300),createdAt:new Date().toISOString()});}finally{busy=false;saveIdeaMessages();if(appSection==='idea-chat')render();}return;} if(!project)return; if(!user){openAuth('signin');return;} const projectId=project.id; const currentProject=visibleProjects().find(p=>p.id===projectId); if(!currentProject)return; messagesByProject[projectId] ||= []; messagesByProject[projectId].push({id:uid(),role:'user',content:text,mode,createdAt:new Date().toISOString()}); buildEvents.unshift({time:new Date().toISOString(),text:'User submitted a message in '+currentProject.title,kind:'input'}); currentProject.updatedAt=new Date().toISOString(); busy=true; persist(); render(); if(user)syncCloud(); try { const {data,error}=await supabase.functions.invoke('henry-chat',{body:{project:{title:currentProject.title,goal:currentProject.goal||''},mode,experienceLevel:user.user_metadata?.experience_level||'beginner',messages:(messagesByProject[projectId]||[]).slice(-20).map(m=>({role:m.role,content:m.content,mode:m.mode||mode}))}}); if(error)throw error; if(!data?.reply)throw new Error(data?.error||'Henry did not receive a response. Please try again.'); if(!user||user.id!==currentProject.userId||!visibleProjects().some(p=>p.id===projectId))return; messagesByProject[projectId].push({id:uid(),role:'assistant',content:data.reply,mode,createdAt:new Date().toISOString()}); buildEvents.unshift({time:new Date().toISOString(),text:'AI response received and added to conversation',kind:'success'}); currentProject.updatedAt=new Date().toISOString(); } catch(error) { console.warn('Henry AI request failed:',error); let detail=String(error.message||error); try { if(error.context instanceof Response){const body=await error.context.clone().json();if(body?.error)detail=String(body.error);} } catch {} if(user&&user.id===currentProject.userId&&visibleProjects().some(p=>p.id===projectId)) messagesByProject[projectId].push({id:uid(),role:'assistant',content:'Henry could not complete that request. Your message is saved.\\n\\nTechnical detail: '+detail.slice(0,300),mode,createdAt:new Date().toISOString()}); } finally {busy=false;persist();if(user)syncCloud();if(activeId===projectId)render();} });
+  $('#message-input')?.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('#composer').requestSubmit()}});
+  const conversation=$('#conversation'); if(conversation) conversation.scrollTop=conversation.scrollHeight;
+}
+function showAccountMenu() {
+  const overlay=$('#auth-overlay'); overlay.innerHTML=`<div class="modal"><button class="icon-button close" id="menu-close">×</button><div class="brand-mark">${escapeHtml((user?.email||'U')[0].toUpperCase())}</div><h2>Account</h2><p class="muted-text">${escapeHtml(user?.email||'')}</p><p class="muted-text">Cloud sync is not enabled for project conversations yet.</p><button class="secondary full" id="signout">Sign out</button></div>`; overlay.hidden=false; $('#menu-close').onclick=()=>overlay.hidden=true; $('#signout').onclick=async()=>{const {error}=await supabase.auth.signOut();if(error){console.warn('Henry sign-out failed:',error);return;}user=null;activeId=null;persist();overlay.hidden=true;const projectOverlay=$('#project-overlay');if(projectOverlay)projectOverlay.hidden=true;render()};
+}
+function finishPendingProject() {
+  let draft = null;
+  try { draft = JSON.parse(localStorage.getItem('henry-v1-pending-project') || 'null'); } catch {}
+  if (!draft) { render(); if (user) syncCloud(); return; }
+  localStorage.removeItem('henry-v1-pending-project');
+  const overlay = $('#project-overlay');
+  if (overlay) overlay.hidden = true;
+  newProject(String(draft.title || 'Untitled engineering project'), String(draft.goal || ''));
+}
+function showExperiencePicker() {
+  const overlay = $('#project-overlay');
+  if (!overlay) return;
+  overlay.innerHTML = `<div class="modal experience-modal"><div class="brand-mark">H</div><p class="eyebrow">PERSONALISE YOUR WORKSPACE</p><h2>Where are you starting from?</h2><p class="muted-text">Henry will adapt the depth of its explanations, technical language, and guidance to your experience. You can still ask to be taught at any time.</p><div class="experience-options">
+    <button class="experience-option" data-level="beginner"><span class="experience-symbol">01</span><span><strong>Beginner</strong><small>Explain the foundations, terminology, and steps clearly.</small></span><span class="experience-arrow">↗</span></button>
+    <button class="experience-option" data-level="intermediate"><span class="experience-symbol">02</span><span><strong>Intermediate</strong><small>Balance practical guidance with deeper technical explanations.</small></span><span class="experience-arrow">↗</span></button>
+    <button class="experience-option" data-level="expert"><span class="experience-symbol">03</span><span><strong>Expert</strong><small>Focus on technical depth, trade-offs, and concise collaboration.</small></span><span class="experience-arrow">↗</span></button>
+  </div><p id="experience-feedback" class="feedback" aria-live="polite"></p></div>`;
+  overlay.hidden = false;
+  overlay.querySelectorAll('[data-level]').forEach(button => button.onclick = async () => {
+    const feedback = $('#experience-feedback');
+    overlay.querySelectorAll('[data-level]').forEach(b => b.disabled = true);
+    feedback.textContent = 'Setting up your workspace…';
+    const level = button.dataset.level;
+    if (user) {
+      const { error } = await supabase.auth.updateUser({ data: { experience_level: level } });
+      if (error) {
+        overlay.querySelectorAll('[data-level]').forEach(b => b.disabled = false);
+        feedback.textContent = 'Your choice could not be saved. Please try again.';
+        console.warn('Henry profile setup failed:', error);
+        return;
+      }
+      user = { ...user, user_metadata: { ...(user.user_metadata || {}), experience_level: level } };
+    } else {
+      localStorage.setItem('henry-v1-pending-experience-level', level);
+    }
+    const pendingLevel = localStorage.getItem('henry-v1-pending-experience-level');
+    if (pendingLevel && user) {
+      const { error } = await supabase.auth.updateUser({ data: { experience_level: pendingLevel } });
+      if (error) { feedback.textContent = 'Your choice could not be saved. Please try again.'; return; }
+      localStorage.removeItem('henry-v1-pending-experience-level');
+      user = { ...user, user_metadata: { ...(user.user_metadata || {}), experience_level: pendingLevel } };
+    }
+    overlay.hidden = true;
+    if (localStorage.getItem('henry-v1-pending-project')) finishPendingProject();
+    else { render(); if (user) syncCloud(); }
+  });
+}
+function showProjectForm(project=null) {
+  const overlay=$('#project-overlay'); overlay.innerHTML=`<div class="modal"><button class="icon-button close" id="project-close">×</button><p class="eyebrow">PROJECT SETUP</p><h2>${project?'Project details':'Start with the idea'}</h2><p class="muted-text">You don't need a perfect specification. Begin with what you know.</p><form id="project-form"><label>Project name<input name="title" maxlength="100" required placeholder="e.g. Smart greenhouse assistant" value="${escapeHtml(project?.title||'')}"></label><label>What do you want to build?<textarea name="goal" rows="4" maxlength="2000" placeholder="Describe the problem, idea, or outcome you want…">${escapeHtml(project?.goal||'')}</textarea></label><button class="primary full" type="submit">${project?'Save changes':'Create project'}</button></form></div>`; overlay.hidden=false; $('#project-close').onclick=()=>overlay.hidden=true; $('#project-form').onsubmit=e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const title=String(fd.get('title')).trim();const goal=String(fd.get('goal')).trim();if(project){project.title=title;project.goal=goal;project.updatedAt=new Date().toISOString();activeId=project.id;}else{if(!user){localStorage.setItem('henry-v1-pending-project',JSON.stringify({title,goal,createdAt:new Date().toISOString()}));overlay.hidden=true;openAuth('signup');return;}newProject(title,goal);overlay.hidden=true;return;}persist();overlay.hidden=true;render();if(user)syncCloud();};
+}
+refreshUser().then(render);
